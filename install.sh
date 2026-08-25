@@ -754,20 +754,47 @@ cd amneziawg-linux-kernel-module/src
 # dkms below runs a make of its own out of the module's dkms.conf, and MAKEFLAGS
 # is the only say this script gets over that one.
 export MAKEFLAGS="-j${JOBS}"
-make -j"$JOBS" >/dev/null 2>&1 || { make; die "$(t "module build failed" \
+# WIREGUARD_VERSION is what the module reports to modinfo, to sysfs and in its
+# "loaded" line in dmesg, and upstream's Makefile hardcodes it to 1.0.0 - a
+# number that has not moved in years and says nothing about which release is
+# running. src/version.h carries the real one behind an #ifndef, so passing it
+# here is what makes the two agree. It is also what dkms below produces on its
+# own: dkms.conf names no MAKE, so dkms drives Kbuild directly, never sets
+# WIREGUARD_VERSION, and gets the header's value. Without this line the module
+# built here and the module dkms installs would report different versions, and
+# the one everybody looks at would be the second.
+make -j"$JOBS" WIREGUARD_VERSION="$MODVER" >/dev/null 2>&1 \
+    || { make WIREGUARD_VERSION="$MODVER"; die "$(t "module build failed" \
                                                    "сборка модуля не удалась")"; }
 echo "$(t "  compiled" "  скомпилировано")"
 
 # DKMS so the module survives kernel upgrades instead of vanishing.
 step "$(t "Registering the module with DKMS" "Регистрация модуля в DKMS")"
+# What the module is registered as, and the directory its source lives in.
+# Upstream's dkms.conf says 1.0.0 and has said so through every release, so a
+# server registered straight from it reports "amneziawg/1.0.0" whichever module
+# it is actually running - dkms status, the summary at the end of this install
+# and the menu's diagnostics all say the same uninformative thing, and an
+# upgrade reuses the one directory rather than standing beside what it replaced.
+# The source version is the honest answer and the one already on the .ko, so it
+# is what gets registered; PACKAGE_VERSION is rewritten to match because dkms
+# reads it back out of the copy under /usr/src and refuses a disagreement.
+# Falls back to upstream's own value if version.h could not be read.
 DKMSVER=$(sed -n 's|^PACKAGE_VERSION="\(.*\)"|\1|p' dkms.conf)
+# The regex is the same guard the removal loop below applies, and for the same
+# reason: this string ends up in a path that `rm -rf` is run against as root.
+if [[ "$MODVER" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+    DKMSVER="$MODVER"
+    sed -i "s|^PACKAGE_VERSION=.*|PACKAGE_VERSION=\"${DKMSVER}\"|" dkms.conf
+fi
 
 # Whatever is registered now, which is not necessarily what is about to be:
-# upstream moves PACKAGE_VERSION between releases. Removing only the version
-# being installed left the previous one registered for good, and two entries
-# under one module name both autoinstall on every kernel upgrade with nothing
-# deciding which .ko wins. dkms prints "amneziawg, 1.0.0, ..." or
-# "amneziawg/1.0.0, ..." depending on its own major version; take both.
+# the line above moves PACKAGE_VERSION between releases, and a server installed
+# before it did carries 1.0.0. Removing only the version being installed left
+# the previous one registered for good, and two entries under one module name
+# both autoinstall on every kernel upgrade with nothing deciding which .ko
+# wins. dkms prints "amneziawg, 1.0.0, ..." or "amneziawg/1.0.0, ..." depending
+# on its own major version; take both.
 dkms_registered() {
     dkms status amneziawg 2>/dev/null \
         | sed -n 's|^amneziawg[,/][[:space:]]*\([^,:]*\).*|\1|p' \
@@ -784,7 +811,10 @@ while read -r OLDVER; do
 done < <(dkms_registered)
 
 rm -rf "/usr/src/amneziawg-${DKMSVER}"
-make dkms-install >/dev/null 2>&1
+# DKMSDIR rather than the Makefile's default, which is built from its own
+# hardcoded WIREGUARD_VERSION and would lay the source down in
+# /usr/src/amneziawg-1.0.0 for a dkms about to look under $DKMSVER.
+make dkms-install DKMSDIR="/usr/src/amneziawg-${DKMSVER}" >/dev/null 2>&1
 dkms add    -m amneziawg -v "$DKMSVER" >/dev/null 2>&1 || true
 dkms build  -m amneziawg -v "$DKMSVER" >/dev/null 2>&1 || die "$(t "dkms build failed" \
                                                                    "сборка через dkms не удалась")"
