@@ -2044,7 +2044,7 @@ are the same pixel dimensions and decode identically. The wheel set is 31 MB
 because of that swap.
 
 Upstream's kernel-module and tools tags are checked by commit, not by name —
-`git clone --branch v3.0.x` follows a tag wherever it has been moved to, and
+`git clone --branch v3.1.x` follows a tag wherever it has been moved to, and
 what gets compiled from it is loaded into the kernel as root. A mismatch stops
 the install before anything is built, and says which commit it wanted. Release
 bundles carry that source in `vendor/` rather than cloning it, so the check

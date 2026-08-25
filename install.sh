@@ -111,11 +111,11 @@ PANEL_ADMIN_PASS=""
 SRC_DIR=/usr/local/src/amneziawg
 SHARE_DIR=/usr/local/share/awg-script
 
-# Pinned upstream releases (the v3.0 line this repo's parameters target),
+# Pinned upstream releases (the v3.1 line this repo's parameters target),
 # so installs are reproducible and not exposed to whatever lands on
 # master. Override with --kmod-ref / --tools-ref.
-KMOD_REF=v3.0.20260805
-TOOLS_REF=v3.0.20260805
+KMOD_REF=v3.1.20260812
+TOOLS_REF=v3.1.20260812
 
 # And the commit each of those tags stood at when this release was tested.
 # A tag is a name, not a fact: upstream can move one at any time and a clone
@@ -124,8 +124,8 @@ TOOLS_REF=v3.0.20260805
 # came with the bundle; a mismatch stops the install either way. Cleared when
 # --kmod-ref / --tools-ref name something else, because a commit recorded for
 # one ref proves nothing about another.
-KMOD_SHA=ce163101dbcddfb64631f5fea52252ea836372b5
-TOOLS_SHA=9f70177d204d5be66c5b043518a57b7d62b3f9d1
+KMOD_SHA=46803204e7ec3b068199cd671143bec661d3fe21
+TOOLS_SHA=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

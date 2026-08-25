@@ -562,14 +562,14 @@ def test_a_module_installed_but_not_yet_loaded_is_said_out_loud(api, monkeypatch
     this page is where someone looks to find out why nothing changed."""
     controller = get_controller()
     features = dict(controller.features())
-    features["module_version"] = "3.0.20260731-04"
-    features["module_version_on_disk"] = "3.0.20260805"
+    features["module_version"] = "3.0.20260805"
+    features["module_version_on_disk"] = "3.1.20260812"
     monkeypatch.setattr(controller, "features", lambda: dict(features))
 
     notes = [text for text in _status_warnings(api) if "amneziawg" in text]
 
     assert notes, _status_warnings(api)
-    assert "3.0.20260731-04" in notes[0] and "3.0.20260805" in notes[0]
+    assert "3.0.20260805" in notes[0] and "3.1.20260812" in notes[0]
     assert "reboot" in notes[0]
 
 
@@ -577,8 +577,8 @@ def test_matching_module_versions_say_nothing(api, monkeypatch):
     """The normal case is every install, so it must not carry a warning."""
     controller = get_controller()
     features = dict(controller.features())
-    features["module_version"] = "3.0.20260805"
-    features["module_version_on_disk"] = "3.0.20260805"
+    features["module_version"] = "3.1.20260812"
+    features["module_version_on_disk"] = "3.1.20260812"
     monkeypatch.setattr(controller, "features", lambda: dict(features))
 
     assert not [text for text in _status_warnings(api) if "reboot" in text]
@@ -588,7 +588,7 @@ def test_an_unknown_version_on_either_side_says_nothing(api, monkeypatch):
     """modinfo missing, or a module with no MODULE_VERSION. Two unknowns are not
     a mismatch, and guessing one would warn on every server that has neither."""
     controller = get_controller()
-    for running, installed in (("3.0.20260805", None), (None, "3.0.20260805"), (None, None)):
+    for running, installed in (("3.1.20260812", None), (None, "3.1.20260812"), (None, None)):
         features = dict(controller.features())
         features["module_version"] = running
         features["module_version_on_disk"] = installed

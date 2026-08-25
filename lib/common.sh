@@ -50,7 +50,7 @@ step() { printf '\n%s==> %s%s\n' "$G" "$*" "$N"; }
 kmod_running()   { cat /sys/module/amneziawg/version 2>/dev/null; }
 kmod_installed() { modinfo amneziawg 2>/dev/null | awk '/^version/{print $2}'; }
 
-# "3.0.20260805", or "3.0.20260731-04 (3.0.20260805 installed, needs reboot)"
+# "3.1.20260812", or "3.0.20260805 (3.1.20260812 installed, needs reboot)"
 # when the two disagree. Empty when neither can be read.
 kmod_version_line() {
     local running installed

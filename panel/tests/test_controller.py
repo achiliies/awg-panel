@@ -504,14 +504,14 @@ def test_the_running_module_is_read_from_sysfs_not_modinfo(fake_sysfs, monkeypat
     """modinfo describes the .ko on disk; sysfs describes what the kernel loaded
     from it. An upgrade that could not unload the old module leaves those
     disagreeing, and every behaviour an admin is looking at is the loaded one."""
-    fake_sysfs("3.0.20260805")
+    fake_sysfs("3.1.20260812")
     monkeypatch.setattr(AwgController, "_module_version_on_disk", staticmethod(lambda: "9.9.9"))
 
-    assert AwgController().module_version() == "3.0.20260805"
+    assert AwgController().module_version() == "3.1.20260812"
 
 
 def test_the_installed_module_is_still_read_from_modinfo(fake_sysfs, monkeypatch):
-    fake_sysfs("3.0.20260805")
+    fake_sysfs("3.1.20260812")
     monkeypatch.setattr(AwgController, "_module_version_on_disk", staticmethod(lambda: "9.9.9"))
 
     assert AwgController().module_version_on_disk() == "9.9.9"
@@ -541,15 +541,15 @@ def test_both_unknown_reports_none(fake_sysfs, monkeypatch):
 
 
 def test_sysfs_version_is_stripped(fake_sysfs):
-    fake_sysfs("  3.0.20260805  ")
+    fake_sysfs("  3.1.20260812  ")
 
-    assert controller_mod._sysfs_module_version() == "3.0.20260805"
+    assert controller_mod._sysfs_module_version() == "3.1.20260812"
 
 
 def test_module_loaded_reads_the_same_sysfs_root(fake_sysfs):
     """The two questions must not drift onto different paths."""
     assert AwgController().module_loaded() in (True, False)
-    fake_sysfs("3.0.20260805")
+    fake_sysfs("3.1.20260812")
     assert AwgController().module_loaded() is True
 
 
