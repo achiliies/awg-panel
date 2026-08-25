@@ -157,7 +157,11 @@ def parse_dump(text: str) -> Dump:
         private_key=_clean(head[0]),
         public_key=_clean(head[1]),
         listen_port=_int(head[2]),
-        fwmark=_clean(head[3]),
+        # Last, not fourth: AmneziaWG prints every obfuscation value between the
+        # listen port and the fwmark, and 3.1 added two more of them. Counting
+        # from the end is what keeps this parser out of that argument - plain
+        # WireGuard's four-field line has fwmark in the same place either way.
+        fwmark=_clean(head[-1]),
     )
     for line in lines[1:]:
         row = _fields(line, 8)

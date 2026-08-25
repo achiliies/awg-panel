@@ -34,6 +34,37 @@ INTERFACE_ROW = [
     "eEm+CjQ0q0o3MCTDexoRJMv3A8wz9PVZVJbqj1yfXUU=",  # private key
     "BBKNFzBhlBZLbRu6o5YaxGYfYy9H3XQJ0VcKG/FBPkY=",  # public key
     "41234",  # listen port
+    "4",  # jc
+    "40",  # jmin
+    "70",  # jmax
+    "24",  # s1
+    "220",  # s2
+    "120",  # s3
+    "20",  # s4
+    "5-500000000",  # h1
+    "500000001-1000000000",  # h2
+    "1000000001-1500000000",  # h3
+    "1500000001-2000000000",  # h4
+    "<b 0x000100002112a442><r 12>",  # i1
+    "(null)",  # i2
+    "(null)",  # i3
+    "(null)",  # i4
+    "(null)",  # i5
+    "(none)",  # header protection key
+    "0",  # content padding addition
+    "0",  # rekey after time
+    "0",  # rekey timeout
+    "0",  # reject after time
+    "0",  # keepalive timeout
+    "0",  # max handshake attempts
+    "off",  # random trailers
+    "off",  # disable cookies
+    "off",  # fwmark
+]
+FOUR_FIELD_INTERFACE_ROW = [
+    "eEm+CjQ0q0o3MCTDexoRJMv3A8wz9PVZVJbqj1yfXUU=",  # private key
+    "BBKNFzBhlBZLbRu6o5YaxGYfYy9H3XQJ0VcKG/FBPkY=",  # public key
+    "41234",  # listen port
     "off",  # fwmark
 ]
 IDLE_PEER_ROW = [
@@ -57,6 +88,9 @@ LIVE_PEER_ROW = [
     "25",
 ]
 REAL_DUMP = "".join("\t".join(row) + "\n" for row in (INTERFACE_ROW, IDLE_PEER_ROW, LIVE_PEER_ROW))
+FOUR_FIELD_DUMP = "".join(
+    "\t".join(row) + "\n" for row in (FOUR_FIELD_INTERFACE_ROW, IDLE_PEER_ROW, LIVE_PEER_ROW)
+)
 
 
 @pytest.fixture
@@ -94,6 +128,12 @@ def test_parse_dump_reads_the_interface_line():
     assert dump.public_key == "BBKNFzBhlBZLbRu6o5YaxGYfYy9H3XQJ0VcKG/FBPkY="
     assert dump.listen_port == 41234
     assert dump.fwmark == "off"
+
+
+def test_parse_dump_plain_wireguard_four_field_interface_row_matches_amneziawg():
+    """A plain WireGuard four-field line places fwmark in the fourth position,
+    which is also the last field, so both shapes parse to the exact same Dump."""
+    assert parse_dump(FOUR_FIELD_DUMP) == parse_dump(REAL_DUMP)
 
 
 def test_parse_dump_reads_every_peer_field():
