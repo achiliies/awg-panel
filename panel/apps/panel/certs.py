@@ -32,6 +32,7 @@ import logging
 from pathlib import Path
 
 from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 log = logging.getLogger(__name__)
@@ -125,15 +126,25 @@ def key_matches_certificate(cert_path: str, key_path: str) -> bool | None:
         return None
     try:
         key = load_pem_private_key(Path(key_path).read_bytes(), password=None)
-    except (OSError, ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
         # TypeError is what an encrypted key raises, and gunicorn has nowhere to
         # type a passphrase either - but that is its refusal to make, not a
         # reason for this to claim the pair is wrong.
+        #
+        # UnsupportedAlgorithm is not a ValueError - it descends straight from
+        # Exception - and cryptography 47 moved the unsupported-algorithm and
+        # unsupported-curve-encoding cases onto it from ValueError. Without it
+        # named here a key this build cannot load would leave by an exception
+        # instead of as None, and the caller is _check_tls_pair in defaults.py: an
+        # unusual key file would turn a settings save into a 500 rather than
+        # into the save that lets gunicorn have the last word.
         log.debug("cannot read private key %s: %s", key_path, exc)
         return None
     try:
         return key.public_key().public_numbers() == cert.public_key().public_numbers()
-    except (AttributeError, ValueError, TypeError) as exc:  # an algorithm without numbers
+    # An algorithm without numbers, or - for UnsupportedAlgorithm - a certificate
+    # whose public key this build of OpenSSL will not hand back at all.
+    except (AttributeError, ValueError, TypeError, UnsupportedAlgorithm) as exc:
         log.debug("cannot compare %s with %s: %s", cert_path, key_path, exc)
         return None
 
@@ -151,11 +162,7 @@ def expires_in_days(path: str) -> int | None:
     cert = _load(path)
     if cert is None:
         return None
-    try:
-        expiry = cert.not_valid_after_utc
-    except AttributeError:  # cryptography < 42
-        expiry = cert.not_valid_after.replace(tzinfo=dt.UTC)
-    return (expiry - dt.datetime.now(dt.UTC)).days
+    return (cert.not_valid_after_utc - dt.datetime.now(dt.UTC)).days
 
 
 def _as_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -169,6 +176,6 @@ def _as_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
 def _load(path: str) -> x509.Certificate | None:
     try:
         return x509.load_pem_x509_certificate(Path(path).read_bytes())
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, UnsupportedAlgorithm) as exc:
         log.debug("cannot read certificate %s: %s", path, exc)
         return None
