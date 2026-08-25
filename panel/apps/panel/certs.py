@@ -61,10 +61,16 @@ def certificate_names(path: str) -> list[str]:
         san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
         names = list(san.value.get_values_for_type(x509.DNSName))
         names += [str(ip) for ip in san.value.get_values_for_type(x509.IPAddress)]
-    except x509.ExtensionNotFound:
+    except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
         # Pre-2017 certificates put the name in the subject only. Browsers stopped
         # honouring that, but reading it costs nothing and it is still what a
         # hand-rolled self-signed certificate is most likely to carry.
+        #
+        # The other two are the same trap UnsupportedAlgorithm is below: extensions
+        # are parsed when this attribute is read rather than when the file is
+        # loaded, so a certificate carrying one twice, or one this build cannot
+        # decode, raises here and not in _load - and DuplicateExtension descends
+        # straight from Exception. The subject is still readable in both cases.
         names = [
             attr.value
             for attr in cert.subject.get_attributes_for_oid(x509.oid.NameOID.COMMON_NAME)

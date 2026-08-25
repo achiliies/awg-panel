@@ -20,6 +20,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
 from django.core.management import call_command
 
@@ -73,6 +74,49 @@ class TestCertificateNames:
 
     def test_unreadable_file_says_nothing(self, tmp_path):
         assert certs.certificate_names(str(tmp_path / "nope.crt")) == []
+
+    def test_falls_back_to_subject_cn_when_extensions_raise_duplicate_extension(
+        self, make_cert, monkeypatch
+    ):
+        """Extensions are parsed on access rather than at load time, and duplicate
+        extensions raise DuplicateExtension. Without the fallback, a certificate
+        with repeated extensions would return an empty name list and report a valid
+        certificate as covering nothing."""
+        cert = make_cert("198.51.100.7")
+        real_load = certs._load
+
+        class DuplicateCert:
+            def __init__(self, inner):
+                self.subject = inner.subject
+
+            @property
+            def extensions(self):
+                raise x509.DuplicateExtension(
+                    "duplicate extension", x509.oid.ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+                )
+
+        monkeypatch.setattr(certs, "_load", lambda p: DuplicateCert(real_load(p)))
+        assert certs.certificate_names(str(cert)) == ["AWG Panel demo"]
+
+    def test_falls_back_to_subject_cn_when_extensions_raise_value_error(
+        self, make_cert, monkeypatch
+    ):
+        """An extension with corrupt or unparseable data raises ValueError when
+        extensions are accessed. Falling back to the subject common name keeps the
+        panel working rather than discarding the certificate's identity."""
+        cert = make_cert("198.51.100.7")
+        real_load = certs._load
+
+        class UnparseableCert:
+            def __init__(self, inner):
+                self.subject = inner.subject
+
+            @property
+            def extensions(self):
+                raise ValueError("unparseable extension data")
+
+        monkeypatch.setattr(certs, "_load", lambda p: UnparseableCert(real_load(p)))
+        assert certs.certificate_names(str(cert)) == ["AWG Panel demo"]
 
 
 class TestCovers:
