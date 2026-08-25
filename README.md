@@ -123,18 +123,18 @@ Open the panel, click a client, scan the QR code — or download the `.conf` and
 <td align="center" valign="top">
 <b>WG Tunnel</b><br><sub>full-featured · recommended</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=com.zaneschepke.wireguardautotunnel"><img src="assets/badges/google-play.svg" alt="Get WG Tunnel on Google Play" height="44"></a><br>
-<a href="https://github.com/wgtunnel/android/releases/tag/5.4.0"><img src="assets/badges/github.svg" alt="Download the WG Tunnel APK from GitHub" height="44"></a><br>
-<sub>APK v5.4.0</sub>
+<a href="https://github.com/wgtunnel/android/releases/tag/5.5.0"><img src="assets/badges/github.svg" alt="Download the WG Tunnel APK from GitHub" height="44"></a><br>
+<sub>APK v5.5.0</sub>
 <br><br>
 <b>AmneziaWG</b><br><sub>official · minimal</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=org.amnezia.awg"><img src="assets/badges/google-play.svg" alt="Get AmneziaWG on Google Play" height="44"></a><br>
-<a href="https://github.com/amnezia-vpn/amneziawg-android/releases/tag/2.0.1"><img src="assets/badges/github.svg" alt="Download the AmneziaWG APK from GitHub" height="44"></a><br>
-<sub>APK v2.0.1</sub>
+<a href="https://github.com/amnezia-vpn/amneziawg-android/releases/tag/v3.1.20260814"><img src="assets/badges/github.svg" alt="Download the AmneziaWG APK from GitHub" height="44"></a><br>
+<sub>APK v3.1.20260814</sub>
 </td>
 <td align="center" valign="top">
 <b>AmneziaWG</b><br><sub>official client</sub><br><br>
-<a href="https://github.com/amnezia-vpn/amneziawg-windows-client/releases/tag/2.0.2"><img src="assets/badges/github.svg" alt="Download AmneziaWG for Windows from GitHub" height="44"></a><br>
-<sub>v2.0.2</sub>
+<a href="https://github.com/amnezia-vpn/amneziawg-windows-client/releases/tag/3.1.0"><img src="assets/badges/github.svg" alt="Download AmneziaWG for Windows from GitHub" height="44"></a><br>
+<sub>v3.1.0</sub>
 </td>
 <td align="center" valign="top">
 <b>AmneziaWG</b><br><sub>official client</sub><br><br>

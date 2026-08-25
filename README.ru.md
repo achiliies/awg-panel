@@ -101,18 +101,18 @@ AmneziaWG — это двигатель. **AWG Panel — это все вокр�
 <td align="center" valign="top">
 <b>WG Tunnel</b><br><sub>многофункциональный · рекомендуемый</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=com.zaneschepke.wireguardautotunnel"><img src="assets/badges/google-play.svg" alt="Скачать WG Tunnel в Google Play" height="44"></a><br>
-<a href="https://github.com/wgtunnel/android/releases/tag/5.4.0"><img src="assets/badges/github.svg" alt="Скачать APK-файл WG Tunnel с GitHub" height="44"></a><br>
-<sub>APK v5.4.0</sub>
+<a href="https://github.com/wgtunnel/android/releases/tag/5.5.0"><img src="assets/badges/github.svg" alt="Скачать APK-файл WG Tunnel с GitHub" height="44"></a><br>
+<sub>APK v5.5.0</sub>
 <br><br>
 <b>AmneziaWG</b><br><sub>официальный · минималистичный</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=org.amnezia.awg"><img src="assets/badges/google-play.svg" alt="Скачать AmneziaWG в Google Play" height="44"></a><br>
-<a href="https://github.com/amnezia-vpn/amneziawg-android/releases/tag/2.0.1"><img src="assets/badges/github.svg" alt="Скачать APK-файл AmneziaWG с GitHub" height="44"></a><br>
-<sub>APK v2.0.1</sub>
+<a href="https://github.com/amnezia-vpn/amneziawg-android/releases/tag/v3.1.20260814"><img src="assets/badges/github.svg" alt="Скачать APK-файл AmneziaWG с GitHub" height="44"></a><br>
+<sub>APK v3.1.20260814</sub>
 </td>
 <td align="center" valign="top">
 <b>AmneziaWG</b><br><sub>официальный клиент</sub><br><br>
-<a href="https://github.com/amnezia-vpn/amneziawg-windows-client/releases/tag/2.0.2"><img src="assets/badges/github.svg" alt="Скачать AmneziaWG для Windows с GitHub" height="44"></a><br>
-<sub>v2.0.2</sub>
+<a href="https://github.com/amnezia-vpn/amneziawg-windows-client/releases/tag/3.1.0"><img src="assets/badges/github.svg" alt="Скачать AmneziaWG для Windows с GitHub" height="44"></a><br>
+<sub>v3.1.0</sub>
 </td>
 <td align="center" valign="top">
 <b>AmneziaWG</b><br><sub>официальный клиент</sub><br><br>
