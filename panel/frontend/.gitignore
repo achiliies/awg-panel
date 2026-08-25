@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# Editor and tooling scratch
+.eslintcache
+*.tsbuildinfo
+.DS_Store
+coverage/

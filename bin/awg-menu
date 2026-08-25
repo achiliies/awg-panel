@@ -1,0 +1,1580 @@
+#!/bin/bash
+#
+# awg-menu - interactive manager for the server this runs on
+#
+# The box, not the VPN's contents. Clients, quotas, traffic, obfuscation and
+# every other setting that ends up in /etc/amnezia/amneziawg belong to the web
+# panel, which is the only writer of those files - this menu never edits them.
+# What is left here is what the panel cannot do for itself: its own port and
+# password, updates, diagnostics, and taking the whole installation off again.
+#
+# Peer counts on the status screens are read in a single pass (one
+# `awg show ... dump`, one config scan) and cached per screen.
+#
+# Keyboard: Up/Down move, Enter selects, Esc or Left/Right+Enter goes Back,
+#           Tab switches buttons, PgUp/PgDn scroll long text.
+#
+# English or Russian, settled by the installer and changed again from the main
+# menu's Language entry. What is translated is what this menu says. What it
+# shows stays as it came: certbot's conversation, a journal, `awg show`, the
+# panel's own CLI. A translated copy of another program's output would be a
+# second thing to keep true rather than a translation of anything.
+#
+set -uo pipefail
+
+[[ ${EUID} -ne 0 ]] && exec sudo -- "$0" "$@"
+
+# ----------------------------------------------------------- shared library
+# lib/ sits beside bin/ in the checkout and the bundle; an installed tool
+# finds the copy install.sh keeps under /usr/local/share/awg-script.
+# AWG_LIB_DIR overrides both - the test harnesses use it.
+AWG_LIB="${AWG_LIB_DIR:-}"
+if [[ -z "$AWG_LIB" ]]; then
+    AWG_SELF=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+    if [[ -f "$AWG_SELF/../lib/common.sh" ]]; then
+        AWG_LIB="$AWG_SELF/../lib"
+    else
+        AWG_LIB=/usr/local/share/awg-script/lib
+    fi
+fi
+[[ -f "$AWG_LIB/common.sh" ]] || {
+    echo "error: shared lib not found at $AWG_LIB (set AWG_LIB_DIR)" >&2; exit 1; }
+# shellcheck source=lib/common.sh
+. "$AWG_LIB/common.sh"
+# shellcheck source=lib/conf.sh
+. "$AWG_LIB/conf.sh"
+# shellcheck source=lib/subnet.sh
+. "$AWG_LIB/subnet.sh"
+# shellcheck source=lib/subnet6.sh
+. "$AWG_LIB/subnet6.sh"
+# Not lib/obfs.sh: drawing a profile is what the installer does and editing one
+# is what the panel does, and this menu has done neither since the client
+# screens left.
+# shellcheck source=lib/firewall.sh
+. "$AWG_LIB/firewall.sh"
+# shellcheck source=lib/panel.sh
+. "$AWG_LIB/panel.sh"
+# shellcheck source=lib/acme.sh
+. "$AWG_LIB/acme.sh"
+
+# whiptail draws through newt, and newt decides whether a pair of bytes is one
+# Cyrillic character or two unreadable ones out of the locale of the process it
+# runs in. lib/i18n.sh picks a UTF-8 locale where the machine came up in C, but
+# deliberately does not export it - the installer wants apt, make and certbot
+# left in whatever the operator set. Here the child process *is* the interface,
+# so the choice has to be carried across: without this a Russian menu draws as
+# question marks and every column in it is measured wrong.
+if [[ -n "${LC_ALL:-}" ]]; then export LC_ALL; fi
+
+# Where install.sh keeps a copy of itself (plus bin/ and lib/), so the menu
+# can re-run it for a rebuild without a checkout on the box.
+SELF_INSTALL=/usr/local/share/awg-script/install.sh
+
+# The update engine. Everything this menu knows about releases it learns by
+# asking that tool, which is the same tool the panel's Update tab drives - so
+# an update started here and one started from a browser are one operation.
+UPDATE_CLI=/usr/local/bin/awg-update
+
+# The line along the bottom of every screen. Set through a function rather than
+# assigned once, because the language can be changed from inside the menu and
+# this is the one piece of text that is on all of it at the same time.
+set_backtitle() {
+    BT="AWG Panel  [${IFACE}]   $(t "Up/Down move | Enter select | Esc back" \
+                                    "Вверх/Вниз — выбор | Enter — открыть | Esc — назад")"
+}
+set_backtitle
+
+command -v whiptail >/dev/null 2>&1 || {
+    echo "$(t "whiptail is required:  apt-get install -y whiptail" \
+              "требуется whiptail:  apt-get install -y whiptail")" >&2; exit 1; }
+[[ -f "$SERVER_CONF" ]] || {
+    echo "$(t "no server config at $SERVER_CONF" \
+              "нет конфигурации сервера: $SERVER_CONF")" >&2; exit 1; }
+
+TMP=$(mktemp -d)
+# Only clear on a real terminal; `clear` on an unknown TERM prints noise.
+cleanup() { rm -rf "$TMP"; [[ -t 1 ]] && command clear 2>/dev/null; return 0; }
+trap cleanup EXIT
+export NEWT_COLORS='root=,black'
+
+# Remember cursor position per menu so returning does not jump to the top.
+LAST_MAIN=panel LAST_DIAG=status LAST_PANEL=status LAST_CERT=issue
+
+# ------------------------------------------------------------ ui helpers
+# Clear what is underneath a dialog.
+#
+# whiptail draws on the terminal's alternate screen and puts the normal one
+# back exactly as it found it on the way out, so whatever was printed there
+# last - a certbot conversation, the tail of an installer - sits behind every
+# dialog and is uncovered again each time one closes. That reads as the
+# interface falling away and coming back, and it is worse while something slow
+# runs between two dialogs, where the stale text is the only thing on the
+# screen and looks like a report of what is happening now.
+#
+# Down stderr rather than stdout: ask() below is read through a command
+# substitution, and a clear on stdout would be captured as the admin's answer.
+wipe() { [[ -t 2 ]] && command clear >&2 2>/dev/null; return 0; }
+
+# How tall a dialog has to be for all of its text to be on it.
+#
+# Every call below carries a height, and every one of those numbers was counted
+# off the English wording. The Russian for the same sentence is routinely a
+# line longer once it has wrapped, so a fixed number fits one language and
+# clips the other - and what it clips is the bottom, which is where these
+# messages keep the sentence saying what to do next.
+#
+# So the number at the call site becomes a floor and the rest is counted: an
+# English dialog comes out exactly the size it always was, and a Russian one
+# grows by however many lines it needs.
+#
+# The default eight is the room this file has always left around a dialog - two
+# borders, a blank line either side of the text, and the button row. An input
+# box spends one of those on the field, so ask() below passes seven and its
+# boxes stay the size they have always been too.
+#
+# Capped at the terminal, because newt refuses to draw a window taller than the
+# screen, and that refusal arrives as an error message where a dialog should be.
+fit() {
+    local text="$1" w=$(( $2 - 6 )) min="$3" chrome="${4:-8}" n=0 seg c max
+    (( w < 20 )) && w=20
+    while :; do
+        seg="${text%%\\n*}"
+        c=${#seg}; (( c < 1 )) && c=1
+        (( n += (c + w - 1) / w ))
+        [[ "$text" == *'\n'* ]] || break
+        text="${text#*\\n}"
+    done
+    (( n += chrome ))
+    (( n < min )) && n="$min"
+    max=$(tput lines 2>/dev/null) || max=24
+    [[ "$max" =~ ^[0-9]+$ ]] && (( max >= 10 )) || max=24
+    (( n > max )) && n="$max"
+    printf '%s' "$n"
+}
+
+# The button labels are newt's own English constants unless it is told
+# otherwise, so a Russian dialog left alone comes out with "OK" and "Yes"
+# underneath it - the two words on the screen the reader has to act on.
+#
+# Shared library functions emit terminal colour escapes when stdout is a
+# terminal at source time. When captured into variables or files and shown in
+# whiptail dialogs, those escapes render as raw control characters and inflate
+# the height fit() calculates. Stripping escapes before fit() and whiptail
+# run keeps dialog dimensions accurate and dialog text readable.
+msg() {
+    local text
+    text=$(strip_ansi_str "$2")
+    wipe
+    whiptail --backtitle "$BT" --title "$1" --ok-button "$(t "OK" "ОК")" \
+             --msgbox "$text" "$(fit "$text" "${4:-72}" "${3:-12}")" "${4:-72}"
+}
+yes_no() {
+    local text
+    text=$(strip_ansi_str "$2")
+    wipe
+    whiptail --backtitle "$BT" --title "$1" \
+             --yes-button "$(t "Yes" "Да")" --no-button "$(t "No" "Нет")" \
+             --yesno "$text" "$(fit "$text" "${4:-72}" "${3:-12}")" "${4:-72}"
+}
+ask() {
+    local text
+    text=$(strip_ansi_str "$2")
+    wipe
+    whiptail --backtitle "$BT" --title "$1" \
+             --ok-button "$(t "OK" "ОК")" --cancel-button "$(t "Cancel" "Отмена")" \
+             --inputbox "$text" "$(fit "$text" 72 10 7)" 72 "${3:-}" 3>&1 1>&2 2>&3
+}
+page() {
+    local src="$2"
+    if strip_ansi < "$2" > "$TMP/.page.txt" 2>/dev/null; then
+        src="$TMP/.page.txt"
+    fi
+    wipe
+    whiptail --backtitle "$BT" --title "$1" --ok-button "$(t "OK" "ОК")" \
+             --scrolltext --textbox "$src" "${3:-24}" "${4:-100}"
+}
+strip_ansi()     { sed -r 's/\x1B\[[0-9;]*[a-zA-Z]//g'; }
+strip_ansi_str() { printf '%s' "$1" | strip_ansi; }
+pause_raw()  { printf '\n  %s' "$(t "Press any key..." "Нажмите любую клавишу...")"
+               read -r -n1 -s; wipe; }
+
+# yes_no with the cursor parked on No, for the one question in this menu whose
+# answer cannot be taken back. Every other dialog here is asking whether to do
+# something that can be done again differently a minute later, and Enter on one
+# of those costs nothing; Enter on the uninstall costs the server.
+yes_no_danger() {
+    local text
+    text=$(strip_ansi_str "$2")
+    wipe
+    whiptail --backtitle "$BT" --title "$1" --defaultno \
+        --yes-button "$(t "Yes" "Да")" --no-button "$(t "No" "Нет")" \
+        --yesno "$text" "$(fit "$text" "${4:-72}" "${3:-12}")" "${4:-72}"
+}
+
+# One line on an otherwise empty screen, for the seconds a restart or a delete
+# takes. Something is happening, this says what, and it replaces the stale
+# screen wipe() exists to get rid of rather than leaving it to be misread.
+busy() { wipe; printf '\n  %s\n' "$*"; }
+
+# One row of a label-and-value screen: `kv <column> <label> <value>`.
+#
+# The column is filled by pad() from lib/i18n.sh rather than by printf's own
+# "%-12s", and the difference is the whole reason this exists. printf counts
+# bytes; a Cyrillic letter is two of them, so a Russian label is padded to
+# about half the column it was given and every value on the screen starts
+# somewhere different. pad counts characters, which is what the terminal draws.
+kv() { printf '  %s%s\n' "$(pad "$2" "$1")" "$3"; }
+
+# The whitespace a paste leaves at either end of a typed path. Only at the
+# ends: a path is allowed a space in the middle of it, and deleting that one
+# turns a file that exists into "nothing at /etc/ssl/mycerts/panel.pem", which
+# reads as the file being missing rather than as the path having been rewritten
+# on the way through.
+trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; printf '%s\n' "${s%"${s##*[![:space:]]}"}"; }
+
+# page_str <title> <string>
+page_str() {
+    local text
+    text=$(strip_ansi_str "$2")
+    printf '%s\n' "$text" > "$TMP/p.txt"
+    page "$1" "$TMP/p.txt" "${3:-24}" "${4:-100}"
+}
+
+# ------------------------------------------------------- data collection
+#
+# Two numbers and a state: how many clients this server has, how many of them
+# are online, and whether the interface is up. That is the whole of what the
+# screens here still show about the VPN's contents - addresses, transfer
+# counters, endpoints and the disabled set all left with the client screens,
+# and gathering them anyway would be a per-peer parse on every redraw that
+# nothing ever reads. The panel is where any of it is looked at now.
+declare -a C_NAME C_PUB
+declare -A D_HS
+IFACE_UP=0
+
+# One line saying what this server does with IPv6, and why.
+#
+# The mode alone is not an answer an admin can act on: "blackhole" reads as a
+# choice somebody made rather than as the consequence of this host having no
+# IPv6 upstream, and the two call for completely different next steps. So the
+# reason is checked against the machine and said out loud.
+ipv6_status() {
+    local mode cidr wan
+    cidr=$(sed -n 's/^[[:space:]]*SUBNET6_CIDR="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+           "$ENV_FILE" 2>/dev/null | tail -1)
+    mode=$(sed -n 's/^[[:space:]]*SUBNET6_MODE="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+           "$ENV_FILE" 2>/dev/null | tail -1)
+    parse_cidr6 "$(iface_get Address)" && cidr=$(subnet6_cidr)
+
+    if [[ -z "$cidr" ]]; then
+        printf '%s' "$(t "off - clients with IPv6 send it outside the tunnel" \
+                         "выключен — клиенты с IPv6 отправляют его мимо туннеля")"
+        return 0
+    fi
+    wan=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+    # printf '%s%s' rather than a format string carrying the words: a format
+    # that changes with the language is one more thing that can be a syntax
+    # error in one of them only.
+    case "$mode" in
+        native)    printf '%s%s' "$cidr" "$(t "   routed, no translation" \
+                                              "   маршрутизируется, без трансляции")" ;;
+        nat)       printf '%s%s' "$cidr" "$(t "   masqueraded behind this host" \
+                                              "   маскируется за этой машиной")" ;;
+        blackhole)
+            if [[ -n "$wan" ]] && ipv6_host_online "$wan"; then
+                printf '%s%s' "$cidr" "$(t "   claimed and rejected (this host has IPv6 now: re-run the installer to carry it)" \
+                                            "   выделен и отклоняется (у машины теперь есть IPv6: перезапустите установщик, чтобы его нести)")"
+            else
+                printf '%s%s' "$cidr" "$(t "   claimed and rejected (no IPv6 upstream on this host)" \
+                                            "   выделен и отклоняется (у машины нет вышестоящего IPv6)")"
+            fi ;;
+        *)         printf '%s%s' "$cidr" "$(t "   mode \"${mode:-unset}\" is not one this tool knows" \
+                                              "   режим «${mode:-unset}» этому инструменту неизвестен")" ;;
+    esac
+}
+
+collect() {
+    C_NAME=(); C_PUB=(); D_HS=()
+    local n p line
+    while IFS= read -r line; do
+        split_peer "$line"; n=$PL_NAME; p=$PL_PUB
+        [[ -z "$n" ]] && n="$(t "(unnamed)" "(без имени)")"
+        C_NAME+=("$n"); C_PUB+=("$p")
+    done < <(peer_list)
+
+    if ip link show "$IFACE" &>/dev/null; then
+        IFACE_UP=1
+        local pub hs
+        while IFS=$'\t' read -r pub _ _ _ hs _; do
+            D_HS["$pub"]="$hs"
+        done < <(awg show "$IFACE" dump 2>/dev/null | tail -n +2)
+    else
+        IFACE_UP=0
+    fi
+}
+
+# online = handshake inside the last 3 minutes
+is_online() {
+    local t="${1:-0}" now
+    [[ -z "$t" || "$t" == "0" ]] && return 1
+    now=$(date +%s); (( now - t < 180 ))
+}
+
+# ------------------------------------------------------- apply changes
+restart_iface() {
+    awg-quick down "$IFACE" >/dev/null 2>&1
+    if awg-quick up "$IFACE" >"$TMP/up.log" 2>&1; then return 0; fi
+    strip_ansi < "$TMP/up.log" > "$TMP/up2.log"
+    page "$(t "Restart FAILED" "ПЕРЕЗАПУСК НЕ УДАЛСЯ")" "$TMP/up2.log"; return 1
+}
+
+# Whether the interface is there, what systemd has, and what it believes about
+# it. Three questions, and on a running server they disagree: install.sh enables
+# awg-quick@<iface> and then brings the tunnel up with awg-quick itself, as
+# restart_iface above does, so the unit sits `enabled` and `inactive` over a
+# tunnel that is up. Only the first of the three says whether clients can
+# connect, and only the last says whether systemctl would do anything if asked.
+iface_present() { ip link show "$IFACE" &>/dev/null; }
+unit_prop()     { systemctl show -p "$1" --value "awg-quick@${IFACE}" 2>/dev/null; }
+unit_loaded()   { [[ $(unit_prop LoadState) == loaded ]]; }
+unit_running() {
+    case $(unit_prop ActiveState) in
+        active|activating|reloading|deactivating) return 0 ;;
+    esac
+    return 1
+}
+
+# A unit parked in `failed` - by an ExecStop that ran against an interface
+# somebody had already taken away - refuses to start again until this is run,
+# and the start it blocks is the one an operator reaches for precisely because
+# the tunnel is down.
+clear_failed() {
+    [[ $(unit_prop ActiveState) == failed ]] || return 0
+    systemctl reset-failed "awg-quick@${IFACE}" >/dev/null 2>&1
+    return 0
+}
+
+# The journal, not the command's own output: systemctl says only that the job
+# failed and points at the log, and the line that explains why - awg-quick
+# naming the parameter the kernel would not take - is in the log it points at.
+#
+# Matching on _SYSTEMD_UNIT rather than passing -u, which is sugar for that plus
+# the messages *about* the unit that PID 1 logs. Those always come last, so
+# "Failed to start AmneziaWG via awg-quick(8)" would be the line shown - true,
+# and the one thing the reader already knows.
+unit_failure() {
+    local verb="$1" stamp="$2"
+    journalctl "_SYSTEMD_UNIT=awg-quick@${IFACE}.service" --since "$stamp" \
+        -n 40 --no-pager -o cat > "$TMP/pw.log" 2>&1
+    [[ -s "$TMP/pw.log" ]] || printf '%s\n' \
+        "$(t "systemctl ${verb} awg-quick@${IFACE} failed, and the unit logged nothing.
+
+Try: journalctl -u awg-quick@${IFACE}" \
+             "systemctl ${verb} awg-quick@${IFACE} завершилась ошибкой, и юнит ничего не записал в журнал.
+
+Посмотрите: journalctl -u awg-quick@${IFACE}")" > "$TMP/pw.log"
+    strip_ansi < "$TMP/pw.log" > "$TMP/pw2.log"
+    # The verb is a systemctl subcommand, so it stays English in both halves.
+    # Said as the command it is, rather than capitalised into a word - "Stop:
+    # НЕ УДАЛОСЬ" is neither language.
+    page "$(t "${verb^} FAILED" "systemctl ${verb}: НЕ УДАЛОСЬ")" "$TMP/pw2.log"
+}
+
+# Unlike unit_failure above, the caller here is naming the operation rather
+# than a command, so it hands over a word that has already been translated.
+quick_failure() {
+    strip_ansi < "$TMP/pw.log" > "$TMP/pw2.log"
+    page "$(t "$1 FAILED" "$1: НЕ УДАЛОСЬ")" "$TMP/pw2.log"
+}
+
+# Stop the tunnel and leave it that way.
+#
+# The unit first, but only where systemd believes it is the one holding the
+# interface up. That belief is what decides whether `systemctl stop` does
+# anything at all: against an `inactive` unit it runs no ExecStop and exits 0,
+# which on the ordinary server described above is a stop that reports success
+# over a tunnel with every client still connected. So the interface is asked
+# afterwards, and awg-quick finishes the job if it is still there.
+#
+# Either path runs the hooks, which is the whole reason neither reaches for
+# `ip link del`: PreDown folds the kernel's per-peer counters into traffic.db,
+# and PostDown takes the upload shaper's HTB root off the WAN interface, where
+# it otherwise keeps metering the path this session and the panel share.
+stop_iface() {
+    local stamp rc=0
+    stamp=$(date '+%Y-%m-%d %H:%M:%S')
+    if unit_running; then
+        systemctl stop "awg-quick@${IFACE}" >/dev/null 2>&1 || rc=1
+    fi
+    if iface_present; then
+        # Judged on the interface rather than on the exit code, in both
+        # directions: a job that failed after the tunnel went down anyway got
+        # what was asked for, and one that exited 0 without touching it did not.
+        (( rc )) && { unit_failure stop "$stamp"; return 1; }
+        awg-quick down "$IFACE" >"$TMP/pw.log" 2>&1 \
+            || { quick_failure "$(t "Stop" "Остановка")"; return 1; }
+    fi
+    clear_failed
+    return 0
+}
+
+# Start it again, through the unit where there is one - which is what makes the
+# next stop work, since systemd runs ExecStop only for a unit it started.
+start_iface() {
+    local stamp rc=0
+    # Idempotent, and not merely as a courtesy: `awg-quick up` on a name the
+    # kernel already has fails, so a second press over a working tunnel would
+    # report a failure about nothing.
+    iface_present && return 0
+    stamp=$(date '+%Y-%m-%d %H:%M:%S')
+    if unit_loaded; then
+        clear_failed
+        systemctl start "awg-quick@${IFACE}" >/dev/null 2>&1 || rc=1
+        iface_present && return 0
+        (( rc )) && { unit_failure start "$stamp"; return 1; }
+        # Exited 0 and brought nothing up: RemainAfterExit left the unit
+        # believing it was already active, so its start ran nothing either.
+    fi
+    awg-quick up "$IFACE" >"$TMP/pw.log" 2>&1 \
+        || { quick_failure "$(t "Start" "Запуск")"; return 1; }
+    return 0
+}
+
+# The confirm-and-report around each of those, so the main menu and Diagnostics
+# offer the same operation rather than two that drift apart. Both return 0 when
+# the tunnel changed state, so a caller can move its cursor onto the entry that
+# undoes what was just done.
+tunnel_stop() {
+    yes_no "$(t "Stop the tunnel" "Остановка туннеля")" \
+           "$(t "Stop ${IFACE} now?\n\nEvery connected client drops, and none of them come\nback until it is started again. This menu, the web\npanel and SSH are not affected - they do not run over\nthe tunnel.\n\nIt stays enabled at boot, so a reboot starts it\nagain by itself." \
+                "Остановить ${IFACE} сейчас?\n\nВсе подключённые клиенты отвалятся и не вернутся,\nпока туннель не будет запущен снова. Это меню,\nвеб-панель и SSH не пострадают — они работают не\nчерез туннель.\n\nАвтозапуск остаётся включённым, так что после\nперезагрузки туннель поднимется сам.")" 17 74 || return 1
+    busy "$(t "Stopping ${IFACE}..." "Останавливаем ${IFACE}...")"
+    stop_iface || return 1
+    msg "$(t "Stopped" "Остановлен")" \
+        "$(t "Tunnel ${IFACE} is stopped.\n\nTraffic counters were saved first by the PreDown hook,\nand upload shaping was taken off the WAN interface.\n\nStart it again from here, or from the panel's\ndashboard." \
+             "Туннель ${IFACE} остановлен.\n\nСчётчики трафика сначала сохранил хук PreDown,\nа ограничение отдачи снято с WAN-интерфейса.\n\nЗапустить его снова можно отсюда или с панели\nуправления в браузере.")" 15 74
+}
+
+tunnel_start() {
+    yes_no "$(t "Start the tunnel" "Запуск туннеля")" \
+           "$(t "Start ${IFACE} now?\n\nClients can connect again as soon as it is up." \
+                "Запустить ${IFACE} сейчас?\n\nКлиенты смогут подключаться, как только он поднимется.")" 11 74 || return 1
+    busy "$(t "Starting ${IFACE}..." "Запускаем ${IFACE}...")"
+    start_iface || return 1
+    # The PostUp hooks the installer writes re-revoke every client a quota or an
+    # expiry switched off, and put the bandwidth ceilings back: a bring-up loads
+    # the whole config, disabled peers included. Re-asserted here for a config
+    # old enough not to carry those hooks, which is the one case where a start
+    # would quietly re-admit a client somebody had cut off. Quiet on failure -
+    # the hook is the real path, this is the belt.
+    [[ -x "$PANEL_CLI" ]] && "$PANEL_CLI" manage enforce >/dev/null 2>&1
+    msg "$(t "Started" "Запущен")" \
+        "$(t "Tunnel ${IFACE} is up.\n\nClients that were switched off for a quota or an\nexpiry date are still switched off." \
+             "Туннель ${IFACE} поднят.\n\nКлиенты, отключённые из-за квоты или истёкшего\nсрока, остаются отключёнными.")" 13 74
+}
+
+# ----------------------------------------------------------- web panel
+# The panel is where the server's contents are managed - clients, quotas,
+# obfuscation, traffic. This screen owns the panel itself: its services and
+# its settings in /etc/awg-panel.env. The tunnel is never touched here.
+panel_menu() {
+    if [[ ! -x "$PANEL_CLI" ]]; then
+        # Not a missing extra any more - a server in this state has no way to
+        # add or revoke a client at all, so it says so in those terms.
+        msg "$(t "Web panel missing" "Веб-панель отсутствует")" \
+"$(t "This server has a tunnel but no panel, which means\nnothing here can add, revoke or account for a client.\n\nPut it back by re-running the installer:\n\n  sudo ./install.sh\n\nor, on a server that already runs AmneziaWG:\n\n  sudo panel/install-panel.sh\n\nThe accounts, quotas and traffic history in\n/var/lib/awg-panel are picked up again if they survived." \
+      "На этом сервере есть туннель, но нет панели — а значит,\nздесь нечем добавить, отозвать или учесть клиента.\n\nВерните её, запустив установщик заново:\n\n  sudo ./install.sh\n\nили, если AmneziaWG уже работает:\n\n  sudo panel/install-panel.sh\n\nУчётные записи, квоты и история трафика в\n/var/lib/awg-panel подхватятся снова, если уцелели.")" 21 74
+        return 0
+    fi
+    while true; do
+        local c web col boot port listen tls
+        web=$(systemctl is-active awg-panel-web 2>/dev/null)
+        col=$(systemctl is-active awg-panel-collector 2>/dev/null)
+        boot=$(systemctl is-enabled awg-panel-web 2>/dev/null)
+        port=$(panel_env_get AWG_PANEL_PORT);     [[ -n "$port" ]]   || port=8088
+        listen=$(panel_env_get AWG_PANEL_LISTEN); [[ -n "$listen" ]] || listen=0.0.0.0
+        # Read off the machine, not off a guess: the screens here used to say
+        # nothing about TLS at all, so an admin with a working certificate had
+        # no way to tell from this menu that they had one.
+        tls=$(acme_state_line)
+        # The tags - status, url, passwd - stay English in both languages,
+        # because they are keys rather than labels: LAST_PANEL remembers one
+        # across a screen and the case below dispatches on them, so translating
+        # them would break both.
+        #
+        # Which is why every menu built that way is given --notags. Without it
+        # whiptail draws the tag in its own column to the left of the label,
+        # and a Russian menu comes up with an English word down its left edge -
+        # panel, lang, uninstall - that means nothing to the reader and cannot
+        # be translated away. --notags hides the column and changes nothing
+        # else: the tag is still what comes back on stdout, and --default-item
+        # still finds its entry by it.
+        c=$(whiptail --backtitle "$BT" --title "$(t "Web panel" "Веб-панель")" \
+            --cancel-button "$(t "Back" "Назад")" \
+            --notags \
+            --default-item "$LAST_PANEL" \
+            --menu "$(t "\nweb ${web}   collector ${col}   ${boot} at boot   on ${listen}:${port}\n${tls}" \
+                        "\nвеб ${web}   сбор ${col}   ${boot} при загрузке   на ${listen}:${port}\n${tls}")" \
+            24 76 13 \
+            status  "$(t "Service state, URL and version" "Состояние служб, адрес и версия")" \
+            url     "$(t "Show the login URL" "Показать адрес для входа")" \
+            passwd  "$(t "Reset the admin password" "Сбросить пароль администратора")" \
+            twofa   "$(t "Reset an account's two-factor login" "Сбросить двухфакторный вход")" \
+            port    "$(t "Change the HTTP port" "Сменить HTTP-порт")" \
+            listen  "$(t "Change the bind address" "Сменить адрес прослушивания")" \
+            cert    "$(t "Certificates - HTTPS, issue, import, renew, remove" "Сертификаты — HTTPS, выпуск, импорт, продление")" \
+            path    "$(t "Regenerate the secret base path" "Сгенерировать новый секретный путь")" \
+            restart "$(t "Restart the panel" "Перезапустить панель")" \
+            start   "$(t "Start the panel" "Запустить панель")" \
+            stop    "$(t "Stop the panel" "Остановить панель")" \
+            boot    "$(t "Toggle starting at boot" "Включить или выключить автозапуск")" \
+            logs    "$(t "Recent panel log" "Последние записи журнала панели")" \
+            3>&1 1>&2 2>&3) || return 0
+        LAST_PANEL="$c"
+
+        case "$c" in
+        status)  "$PANEL_CLI" status > "$TMP/pl.txt" 2>&1
+                 page "$(t "Web panel status" "Состояние веб-панели")" "$TMP/pl.txt" 22 88 ;;
+        url)     msg "$(t "Panel URL" "Адрес панели")" \
+                     "$("$PANEL_CLI" url 2>&1)\n\n$(t "The random path keeps scanners off the login page.\nIt is defence in depth, not a replacement for the\npassword." \
+                                                        "Случайный путь прячет страницу входа от сканеров.\nЭто дополнительный рубеж, а не замена паролю.")" 13 74 ;;
+        passwd)  clear; "$PANEL_CLI" passwd; pause_raw ;;
+        twofa)
+            local u who
+            # The account can be renamed from the panel's own settings, so the
+            # box is filled in with what it is called now rather than with the
+            # name it was installed under. A panel with more than one account
+            # answers nothing, and then the field is a question again.
+            who=$("$PANEL_CLI" manage accountname 2>/dev/null) || who=""
+            u=$(ask "$(t "Reset two-factor" "Сброс двухфакторного входа")" \
+                    "$(t "Account whose TOTP device should be removed:" \
+                         "Учётная запись, у которой снять TOTP-устройство:")" "$who") || continue
+            [[ -z "$u" ]] && continue
+            if "$PANEL_CLI" reset-2fa "$u" > "$TMP/2fa.txt" 2>&1; then
+                msg "$(t "Two-factor reset" "Двухфакторный вход сброшен")" \
+                    "$(t "Two-factor is off for '$u' until they enrol\nagain from the panel's settings page." \
+                         "У «$u» двухфакторный вход выключен, пока он не\nподключит его заново на странице настроек панели.")"
+            else
+                page "$(t "Two-factor reset failed" "Сбросить двухфакторный вход не удалось")" "$TMP/2fa.txt" 16 76
+            fi ;;
+        port)
+            local p note holder
+            p=$(ask "$(t "Panel port" "Порт панели")" \
+                    "$(t "New HTTP port for the panel (1-65535). The service\nruns as root, so 443 works - as long as no web\nserver is already listening there:" \
+                         "Новый HTTP-порт панели (1-65535). Служба работает\nот root, так что 443 подойдёт — если только на нём\nуже не слушает какой-нибудь веб-сервер:")" "$port") || continue
+            [[ "$p" =~ ^[0-9]+$ ]] && (( p>=1 && p<=65535 )) \
+                || { msg "$(t "Invalid" "Недопустимо")" "$(t "Not a valid port." "Это не номер порта.")"; continue; }
+            [[ "$p" == "$port" ]] && continue
+            # Refuse to move onto an occupied port. The panel restarts onto the
+            # new port immediately and will not come back up if it cannot bind,
+            # which leaves the host reachable only over SSH until somebody edits
+            # the environment file by hand.
+            if port_busy tcp "$p"; then
+                holder=$(port_holder tcp "$p")
+                msg "$(t "Port ${p} is in use" "Порт ${p} занят")" \
+                    "$(t "${holder:-Something} is already listening on ${p}/tcp, so the\npanel cannot bind there. The panel has not been moved." \
+                         "${holder:-Что-то} уже слушает ${p}/tcp, поэтому панель\nне сможет запуститься. Панель не перенесена.")" 13 74
+                continue
+            fi
+            panel_env_set AWG_PANEL_PORT "$p" \
+                || { msg "$(t "Not changed" "Не изменено")" \
+                         "$(t "Could not write ${PANEL_ENV}, so the panel is\nstill on port ${port}." \
+                              "Не удалось записать ${PANEL_ENV}, панель осталась\nна порту ${port}.")"; continue; }
+            fw_move "$p" "$port" tcp
+            busy "$(t "Restarting the panel on port ${p}..." "Перезапускаем панель на порту ${p}...")"
+            "$PANEL_CLI" restart >/dev/null 2>&1
+            note="$(t "Allow inbound TCP ${p} in your firewall or cloud\nsecurity group by hand." \
+                      "Разрешите входящий TCP ${p} в межсетевом экране или\nв группе безопасности облака вручную.")"
+            [[ -n "$FW_HANDLED" ]] && note="$(t "${FW_HANDLED} was updated (${port} -> ${p}). A cloud\nsecurity group still needs the new rule added by hand." \
+                                                "${FW_HANDLED} обновлён (${port} -> ${p}). Правило в группе\nбезопасности облака всё равно придётся добавить вручную.")"
+            msg "$(t "Panel moved" "Панель перенесена")" \
+                "$(t "The panel now answers on:" "Теперь панель отвечает по адресу:")\n\n  $("$PANEL_CLI" url 2>/dev/null)\n\n${note}" 15 74 ;;
+        listen)
+            local l addr_re='^[0-9A-Fa-f.:]+$'
+            l=$(ask "$(t "Bind address" "Адрес прослушивания")" \
+                    "$(t "Address the panel listens on. 0.0.0.0 = every\ninterface; 127.0.0.1 = this box only (reach it over\nan SSH tunnel or a reverse proxy):" \
+                         "Адрес, на котором слушает панель. 0.0.0.0 — все\nинтерфейсы; 127.0.0.1 — только эта машина (тогда\nчерез SSH-туннель или обратный прокси):")" "$listen") || continue
+            [[ -z "$l" || "$l" == "$listen" ]] && continue
+            [[ "$l" =~ $addr_re ]] \
+                || { msg "$(t "Invalid" "Недопустимо")" \
+                         "$(t "Use an IPv4 or IPv6 address." "Нужен адрес IPv4 или IPv6.")"; continue; }
+            panel_env_set AWG_PANEL_LISTEN "$l" \
+                || { msg "$(t "Not changed" "Не изменено")" \
+                         "$(t "Could not write ${PANEL_ENV}." "Не удалось записать ${PANEL_ENV}.")"; continue; }
+            busy "$(t "Restarting the panel on ${l}..." "Перезапускаем панель на ${l}...")"
+            "$PANEL_CLI" restart >/dev/null 2>&1
+            msg "$(t "Bind address changed" "Адрес прослушивания изменён")" \
+                "$(t "The panel now listens on ${l}:${port}:" "Теперь панель слушает на ${l}:${port}:")\n\n  $("$PANEL_CLI" url 2>/dev/null)" ;;
+        cert)    cert_menu ;;
+        path)
+            local newpath
+            yes_no "$(t "Secret path" "Секретный путь")" \
+                   "$(t "Generate a new random base path?\n\nThe old URL stops working immediately, so every\nbookmark must be updated. The random path keeps\nscanners off the login page - defence in depth, not\nauthentication." \
+                        "Сгенерировать новый случайный путь?\n\nСтарый адрес перестанет работать сразу же, так что\nвсе закладки придётся обновить. Случайный путь\nпрячет страницу входа от сканеров — это\nдополнительный рубеж, а не аутентификация.")" 14 74 || continue
+            # Checked before it is written rather than after, because the
+            # shape is the whole of what the action is worth: a generator that
+            # quietly produced nothing would move the panel to a path with no
+            # secret in it, and that is a panel which comes up, answers, and is
+            # open - the one outcome nothing downstream would ever report.
+            newpath=$(panel_base_path_new)
+            [[ "$newpath" =~ ^/awg/[a-z0-9]{20}/$ ]] \
+                || { msg "$(t "Not changed" "Не изменено")" \
+                         "$(t "Could not generate a new path, so the panel has not\nbeen moved." \
+                              "Не удалось сгенерировать новый путь, панель осталась\nна прежнем адресе.")"; continue; }
+            panel_env_set AWG_PANEL_BASE_PATH "$newpath" \
+                || { msg "$(t "Not changed" "Не изменено")" \
+                         "$(t "Could not write ${PANEL_ENV}." "Не удалось записать ${PANEL_ENV}.")"; continue; }
+            busy "$(t "Restarting the panel on the new path..." "Перезапускаем панель на новом пути...")"
+            "$PANEL_CLI" restart >/dev/null 2>&1
+            msg "$(t "Path changed" "Путь изменён")" \
+                "$(t "The panel moved to:" "Панель переехала на:")\n\n  $("$PANEL_CLI" url 2>/dev/null)" ;;
+        restart) busy "$(t "Restarting the panel..." "Перезапускаем панель...")"
+                 "$PANEL_CLI" restart >/dev/null 2>&1 \
+                 && msg "$(t "Restarted" "Перезапущена")" \
+                        "$(t "The panel was restarted.\n\nOpen sessions have to log in again." \
+                             "Панель перезапущена.\n\nОткрытым сеансам придётся войти заново.")" ;;
+        start)   busy "$(t "Starting the panel..." "Запускаем панель...")"
+                 "$PANEL_CLI" start >/dev/null 2>&1 \
+                 && msg "$(t "Started" "Запущена")" \
+                        "$(t "The panel is running:" "Панель работает:")\n\n  $("$PANEL_CLI" url 2>/dev/null)" ;;
+        stop)    yes_no "$(t "Stop the panel" "Остановка панели")" \
+                        "$(t "Stop the web panel?\n\nThe tunnel keeps running and this menu keeps working;\nonly the browser interface goes away." \
+                             "Остановить веб-панель?\n\nТуннель продолжит работать, и это меню тоже;\nисчезнет только интерфейс в браузере.")" \
+                 && { busy "$(t "Stopping the panel..." "Останавливаем панель...")"
+                      "$PANEL_CLI" stop >/dev/null 2>&1
+                      msg "$(t "Stopped" "Остановлена")" \
+                          "$(t "The panel is stopped. Quota and expiry enforcement\nstops with it - clients stay connected until you\nstart it again." \
+                               "Панель остановлена. Вместе с ней перестают\nприменяться квоты и сроки — клиенты остаются\nна связи, пока вы не запустите её снова.")"; } ;;
+        boot)    if [[ "$boot" == enabled ]]; then
+                     "$PANEL_CLI" disable >/dev/null 2>&1
+                     msg "$(t "Boot" "Автозапуск")" \
+                         "$(t "The panel will no longer start at boot." \
+                              "Панель больше не будет запускаться при загрузке.")"
+                 else
+                     "$PANEL_CLI" enable >/dev/null 2>&1
+                     msg "$(t "Boot" "Автозапуск")" \
+                         "$(t "The panel will start at boot." \
+                              "Панель будет запускаться при загрузке.")"
+                 fi ;;
+        logs)    "$PANEL_CLI" logs -n 120 > "$TMP/pg.txt" 2>&1
+                 page "$(t "Panel log" "Журнал панели")" "$TMP/pg.txt" 24 100 ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------- certificate
+# One screen for the panel's TLS: what it is serving, getting a certificate,
+# pointing at one that is already on the box, renewing it, deleting it, and
+# going back to plain HTTP.
+#
+# It replaces two entries that between them could not answer the question an
+# admin arrives with. "HTTPS" ran the installer's issuing conversation, which
+# opened by announcing that the panel was on plain HTTP whether it was or not;
+# "TLS" was an on/off switch that never said what it was switching, and its
+# only check on the paths it was given was that both files existed - so a key
+# belonging to some other certificate passed, and the first anyone heard of it
+# was a panel that would not start. Either entry could be used to contradict
+# the other, and neither read the machine.
+
+# The address to offer as the default when issuing for an IP: what the clients
+# are told to connect to, falling back to the route out.
+cert_endpoint() {
+    local ep
+    ep=$(sed -n 's/^ENDPOINT_HOST="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$ENV_FILE" 2>/dev/null | tail -1)
+    [[ -n "$ep" ]] || ep=$(route_src_addr)
+    printf '%s\n' "$ep"
+}
+
+# The pair cert_reachable settled on. Declared here rather than left to spring
+# into existence inside it, because this script runs under `set -u` and a
+# global that only exists once some path has been taken is an unbound variable
+# waiting for the path that has not been taken.
+CERT_USE=""
+KEY_USE=""
+
+# Make a pair one the panel's service can actually open, asking first.
+#
+# The panel's units run with systemd's ProtectHome=yes and PrivateTmp=yes, so
+# the service is handed an empty /root, /home and /run/user and a private /tmp.
+# This menu runs as plain root, outside that namespace, and reads every one of
+# those paths without difficulty - which is how a certificate under
+# /root/.acme.sh, the directory acme.sh installs into by default, came to be
+# offered on a list and then refused at the end of a restart the admin had
+# already agreed to. Nothing was wrong with the certificate. gunicorn simply
+# could not see the file.
+#
+# The sandbox is not opened up to reach it. The pair is installed where the
+# service can read it and the panel pointed at the copy, which is also what the
+# panel's own Settings page has always told anyone who typed such a path.
+#
+# Leaves the pair to use in CERT_USE and KEY_USE, and returns non-zero when the
+# admin said no or the install failed - which the caller treats as a cancel,
+# because nothing has been changed at that point.
+#
+# The answer comes back in variables rather than on stdout, and it has to.
+# whiptail draws its dialogs on stdout - that is why ask() goes to the trouble
+# of swapping descriptors to get a typed value back off stderr - so a helper
+# that opens dialogs and is called as `x=$(cert_reachable ...)` has its entire
+# user interface captured into the variable instead of drawn on the terminal.
+# The admin would be looking at a blank screen waiting for a keystroke on a
+# question they cannot see.
+cert_reachable() {
+    local crt="$1" key="$2"
+    CERT_USE="$crt"; KEY_USE="$key"
+    [[ -n "$ACME_PAIR_MASKED" ]] || return 0
+
+    yes_no "$(t "The panel cannot see that file" "Панель не видит этот файл")" \
+           "$(t "  ${ACME_PAIR_MASKED}\n\nThe panel's service runs with systemd's ProtectHome=yes,\nso it is handed an empty /root and /home and cannot open\nthat file - however plainly this menu reads it.\n\nInstall the certificate and its key into /etc/ssl/awg-panel/,\nwhere the service can read them, and serve the panel from\nthere?" \
+                "  ${ACME_PAIR_MASKED}\n\nСлужба панели работает с systemd ProtectHome=yes, поэтому\nей отдают пустые /root и /home, и открыть этот файл она не\nможет — как бы спокойно его ни читало это меню.\n\nУстановить сертификат и ключ в /etc/ssl/awg-panel/, откуда\nслужба сможет их прочитать, и отдавать панель оттуда?")" 17 74 \
+        || return 1
+
+    busy "$(t "Installing the certificate where the panel can read it..." \
+             "Устанавливаем сертификат туда, откуда панель его прочитает...")"
+    # Called directly, with only its stdout thrown away: the paths it prints
+    # are the same two it leaves in ACME_ADOPT_CERT and ACME_ADOPT_KEY, and
+    # capturing them would put ACME_ADOPT_HOW and ACME_ADOPT_ERR in a subshell
+    # that closes before either can be read.
+    acme_adopt "$crt" "$key" >/dev/null || {
+        msg "$(t "That did not work" "Не получилось")" \
+            "${ACME_ADOPT_ERR}\n\n$(t "Nothing was changed." "Ничего не изменено.")" 12 78
+        return 1
+    }
+
+    # Only the plain copy is worth a dialog. The acme.sh route leaves acme.sh
+    # rewriting this copy and restarting the panel on every renewal, and
+    # "direct" means nothing was copied at all - but a copy nothing refreshes
+    # is a panel that goes on serving the old certificate after the real one
+    # has been renewed, and that failure is invisible until it expires.
+    if [[ "$ACME_ADOPT_HOW" == "copy" ]]; then
+        msg "$(t "Copied, not linked" "Скопировано, не связано")" \
+            "$(t "The files were copied to /etc/ssl/awg-panel/.\n\nWhatever renews the certificate where it lives will not\nreach that copy, so the panel goes on serving this one\nuntil the copy is made again." \
+                 "Файлы скопированы в /etc/ssl/awg-panel/.\n\nТо, что продлевает сертификат по исходному пути, до этой\nкопии не дойдёт: панель будет отдавать именно её, пока\nкопию не сделают заново.")" 13 74
+    fi
+
+    CERT_USE="$ACME_ADOPT_CERT"; KEY_USE="$ACME_ADOPT_KEY"
+    return 0
+}
+
+# Switch the panel to a pair, and say so only if it did not work. acme_apply
+# rolls back on its own, so a refusal here leaves the panel exactly where it
+# was rather than off the network.
+#
+# Nothing is shown on success on purpose. The line above the menu is this
+# screen's answer to "what is the panel serving", it is re-read on every pass
+# of the loop, and it says HTTPS is on and for what by the time the admin is
+# looking at it again - so a dialog saying the same thing is one more key to
+# press for something already on the screen behind it.
+cert_apply() {
+    busy "$(t "Restarting the panel onto that certificate..." \
+             "Перезапускаем панель на этот сертификат...")"
+    if acme_apply "$1" "$2" > "$TMP/ap.txt" 2>&1; then
+        wipe
+        return 0
+    fi
+    page "$(t "That certificate was not accepted" "Сертификат не принят")" "$TMP/ap.txt" 16 80
+    return 1
+}
+
+# What to call one of certbot's certificates on screen.
+#
+# Not the lineage name on its own. The panel's own lineage is called
+# "awg-panel" - fixed, so that a second run replaces the first rather than
+# stacking up a -0001 beside it - and putting that bare string into the delete
+# screen produced "Delete awg-panel?" and "awg-panel is gone.", which is the
+# panel itself being removed as far as anybody reading it is concerned. A
+# certificate is named here by what it covers, which is what the admin
+# recognises anyway; the lineage name is only reached for when the file cannot
+# be read to ask.
+cert_label() {
+    local names
+    names=$(acme_cert_names "${ACME_LE}/live/${1}/fullchain.pem" 2>/dev/null)
+    if [[ -n "$names" ]]; then
+        printf '%s' "$(t "the certificate for ${names}" "сертификат для ${names}")"
+    else
+        printf '%s' "$(t "the certificate certbot files under ${1}" \
+                         "сертификат, который certbot хранит под именем ${1}")"
+    fi
+}
+
+# What a successful issue or renewal says.
+#
+# Getting a certificate is the one thing on this screen worth stopping for: it
+# is the slowest, the one with the most that can go wrong in the middle of it,
+# and the only one where the admin has been watching certbot's output scroll
+# past and wants telling which way it went. The state line and the URL come
+# with it, because the panel's address has just changed scheme and this is
+# where anybody would look for the new one.
+#
+# The quieter operations - importing a pair, picking one already on the box,
+# deleting one, turning HTTPS off - still say nothing on success. The header
+# above the menu, or the list itself, has already changed by the time the
+# admin is looking at it.
+cert_issued() {
+    msg "$(t "HTTPS on" "HTTPS включён")" \
+        "$1\n\n$(acme_state_line)\n\n  $("$PANEL_CLI" url 2>/dev/null)" 13 76
+}
+
+# The one dialog a failed issue or renewal gets.
+#
+# ACME_FLOW_ERR is the sentence worth reading; certbot's own output is several
+# screens of ACME URLs in which that sentence never appears last, so it goes
+# underneath rather than instead. When certbot never ran there is no log, and
+# then the reason is the whole of it.
+cert_flow_failed() {
+    [[ -n "$ACME_FLOW_ERR" ]] || ACME_FLOW_ERR=$(t "It did not work, and said nothing about why." \
+                                                   "Не получилось, и почему — не сказано.")
+    if [[ -s "${ACME_LOG:-}" ]]; then
+        {   printf '%s\n\n' "$ACME_FLOW_ERR"
+            printf -- '%s\n\n' "$(t "--- certbot said ---" "--- certbot сообщил ---")"
+            strip_ansi < "$ACME_LOG"
+        } > "$TMP/fl.txt"
+        page "$(t "No certificate" "Сертификата нет")" "$TMP/fl.txt" 22 86
+    else
+        msg "$(t "No certificate" "Сертификата нет")" \
+            "$ACME_FLOW_ERR\n\n$(t "Nothing was changed." "Ничего не изменено.")" 13 76
+    fi
+}
+
+cert_menu() {
+    while true; do
+        local c head found_n=0 lin_n=0 line nm
+        acme_state
+        if (( ! ACME_ST_ON )); then
+            head=$(t "Plain HTTP - no certificate in use" \
+                     "Обычный HTTP — сертификат не используется")
+        elif [[ -n "$ACME_ST_ERR" ]]; then
+            head=$(t "HTTPS ON but BROKEN - ${ACME_ST_ERR}" \
+                     "HTTPS ВКЛЮЧЁН, но СЛОМАН — ${ACME_ST_ERR}")
+        else
+            # Clipped, because a certificate with a dozen names would wrap
+            # this header onto a third line and take the dialog past the
+            # height it is given. "view" below prints the whole list.
+            nm=$(acme_cert_names_brief "$ACME_ST_CERT" 42)
+            head=$(t "HTTPS ON   ${nm}   ${ACME_ST_ISSUER}   $(acme_cert_left "$ACME_ST_CERT") left" \
+                     "HTTPS ВКЛ   ${nm}   ${ACME_ST_ISSUER}   осталось $(acme_cert_left "$ACME_ST_CERT")")
+        fi
+        while IFS= read -r line; do [[ -n "$line" ]] && (( ++found_n )); done < <(acme_existing_certs)
+        while IFS= read -r line; do [[ -n "$line" ]] && (( ++lin_n ));   done < <(acme_lineages)
+
+        # Only what this machine can actually do right now. A "renew" that
+        # certbot holds no lineage for, or a "delete" with nothing to delete,
+        # is a menu entry whose whole content is an error message.
+        local -a it=()
+        (( ACME_ST_ON )) && it+=(view "$(t "Show the certificate in use" \
+                                           "Показать используемый сертификат")")
+        it+=(issue  "$(t "Get a certificate from Let's Encrypt" \
+                         "Получить сертификат от Let's Encrypt")")
+        it+=(import "$(t "Use certificate files already on this server" \
+                         "Использовать файлы сертификата с этого сервера")")
+        (( found_n )) && it+=(found "$(t "Pick one of the ${found_n} certificate(s) found here" \
+                                         "Выбрать один из найденных здесь сертификатов (${found_n})")")
+        # The lineage has to still be on disk, not merely named in the env
+        # file: a certificate deleted out from under the panel leaves the path
+        # behind, and an entry that can only answer "certbot holds no
+        # certificate called that" is the error message this list is meant to
+        # keep off the screen.
+        [[ -n "$ACME_ST_LINEAGE" && -d "${ACME_LE}/live/${ACME_ST_LINEAGE}" ]] \
+            && it+=(renew "$(t "Renew the panel's certificate, now" \
+                               "Продлить сертификат панели прямо сейчас")")
+        (( lin_n )) && it+=(remove "$(t "Delete an issued certificate" \
+                                        "Удалить выпущенный сертификат")")
+        (( ACME_ST_ON )) && it+=(off "$(t "Turn HTTPS off" "Выключить HTTPS")")
+        it+=(renewal "$(t "Renewal: certbot, schedule and hook" \
+                          "Продление: certbot, расписание и хук")")
+
+        c=$(whiptail --backtitle "$BT" --title "$(t "Certificate management" "Управление сертификатами")" \
+            --cancel-button "$(t "Back" "Назад")" \
+            --notags \
+            --default-item "$LAST_CERT" \
+            --menu "\n${head}\n" 21 78 9 "${it[@]}" \
+            3>&1 1>&2 2>&3) || return 0
+        LAST_CERT="$c"
+
+        case "$c" in
+        view)
+            acme_cert_report "$ACME_ST_CERT" "$ACME_ST_KEY" > "$TMP/cv.txt" 2>&1
+            page "$(t "Certificate in use" "Используемый сертификат")" "$TMP/cv.txt" 22 86 ;;
+        issue)
+            # Out of whiptail for this one. It is a conversation rather than a
+            # form - questions whose wording is the point, with certbot's own
+            # output in the middle of them - and it is the same code the
+            # installer runs, so the screen here is the one seen at install.
+            if (( ACME_ST_ON )) && [[ -z "$ACME_ST_ERR" ]]; then
+                yes_no "$(t "Replace it" "Замена сертификата")" \
+                       "$(t "The panel is serving ${ACME_ST_NAMES}.\n\nGet a new certificate and switch to it?" \
+                            "Панель отдаёт ${ACME_ST_NAMES}.\n\nПолучить новый сертификат и перейти на него?")" 11 74 || continue
+            fi
+            clear
+            local irc=1
+            # Emptied here rather than after the tty check: a run that never
+            # got as far as certbot would otherwise be explained out of the
+            # previous one's output, which is a reason for something that did
+            # not happen this time.
+            ACME_LOG="$TMP/certbot.log"; : > "$ACME_LOG"
+            if acme_tty_open; then
+                acme_issue_flow "$(cert_endpoint)"; irc=$?
+                acme_tty_close
+            else
+                ACME_FLOW_ERR=$(t "There is no terminal to hold that conversation on." \
+                                   "Нет терминала, на котором можно вести этот разговор.")
+            fi
+            # The conversation is over either way, so the screen it was held on
+            # goes now rather than staying behind the menu.
+            wipe
+            case "$irc" in
+                0) cert_issued "$(t "A certificate was issued and the panel is serving it." \
+                                     "Сертификат выпущен, и панель его отдаёт.")" ;;
+                2) ;;                                       # backed out; nothing happened
+                *) cert_flow_failed ;;
+            esac ;;
+        import)
+            local crt key kdef rc
+            crt=$(ask "$(t "Certificate" "Сертификат")" \
+                      "$(t "Full path to the certificate (PEM). Use the full\nchain file where there is one:" \
+                           "Полный путь к сертификату (PEM). Если есть файл\nс полной цепочкой — укажите его:")" "$ACME_ST_CERT") || continue
+            crt=$(trim "$crt"); [[ -n "$crt" ]] || continue
+            kdef=$(acme_key_beside "$crt"); [[ -n "$kdef" ]] || kdef="$ACME_ST_KEY"
+            key=$(ask "$(t "Private key" "Закрытый ключ")" \
+                      "$(t "Full path to the private key (PEM):" \
+                           "Полный путь к закрытому ключу (PEM):")" "$kdef") || continue
+            key=$(trim "$key"); [[ -n "$key" ]] || continue
+            # Everything gunicorn would refuse, checked before the switch is
+            # thrown, so the answer is the reason rather than a dead panel.
+            acme_check_pair "$crt" "$key"; rc=$?
+            (( rc == 1 )) && { msg "$(t "Not usable" "Не годится")" \
+                                   "${ACME_PAIR_ERR}\n\n$(t "Nothing was changed." "Ничего не изменено.")" 12 78; continue; }
+            if (( rc == 2 )); then
+                yes_no "$(t "Expired" "Истёк")" \
+                       "${ACME_PAIR_ERR}\n\n$(t "Use it anyway? Every browser will refuse it." \
+                                                  "Всё равно использовать? Любой браузер его отвергнет.")" 11 74 || continue
+            fi
+            # Before the questions below rather than after them, so that what
+            # the admin is asked about the chain and the signature is the pair
+            # the panel is actually going to be handed.
+            cert_reachable "$crt" "$key" || continue
+            crt="$CERT_USE"; key="$KEY_USE"
+            # A self-signed certificate has no chain to be missing, so it gets
+            # the warning that is actually true of it: turning TLS on with one
+            # is the single case where HTTPS makes the panel look broken rather
+            # than safe, and an admin who reaches for one to get off plain HTTP
+            # should hear that before the switch is thrown rather than from
+            # their browser afterwards.
+            if acme_cert_selfsigned "$crt"; then
+                yes_no "$(t "Self-signed" "Самоподписанный")" \
+                       "$(t "That certificate is signed by itself, so no browser\ntrusts it: every visit opens on a full-page warning\nthat has to be clicked through.\n\nUse it anyway?" \
+                            "Этот сертификат подписан сам собой, поэтому ему не\nдоверяет ни один браузер: каждый заход начинается\nс полноэкранного предупреждения, которое нужно\nпрокликать.\n\nВсё равно использовать?")" 13 74 || continue
+            elif (( $(acme_cert_count "$crt") < 2 )); then
+                yes_no "$(t "No chain" "Нет цепочки")" \
+                       "$(t "That file holds the leaf certificate alone, with no\nintermediate beside it. Clients that have not cached\nthe chain elsewhere will reject it.\n\nUse it anyway?" \
+                            "В файле лежит только конечный сертификат, без\nпромежуточного. Клиенты, у которых цепочка не\nсохранена откуда-то ещё, его отвергнут.\n\nВсё равно использовать?")" 13 74 || continue
+            fi
+            cert_apply "$crt" "$key" ;;
+        found)
+            local -a fpath=() fitem=()
+            local p n=0 s k
+            while IFS= read -r p; do
+                [[ -n "$p" ]] || continue
+                fpath+=("$p"); (( ++n ))
+                fitem+=("$n" "$(acme_cert_names_brief "$p" 40)   $(acme_cert_left "$p")")
+            done < <(acme_existing_certs)
+            (( n )) || { msg "$(t "None" "Ничего нет")" \
+                             "$(t "No usable certificate was found on this machine." \
+                                  "На этой машине не найдено ни одного пригодного сертификата.")"; continue; }
+            s=$(whiptail --backtitle "$BT" --title "$(t "Certificates on this machine" "Сертификаты на этой машине")" \
+                --cancel-button "$(t "Back" "Назад")" \
+                --menu "$(t "\nServe the panel with which one?" "\nКаким из них отдавать панель?")" \
+                20 78 8 "${fitem[@]}" 3>&1 1>&2 2>&3) || continue
+            [[ "$s" =~ ^[0-9]+$ ]] || continue
+            p="${fpath[$((s-1))]}"
+            # This list is pick-and-go: acme_existing_certs only offers a
+            # certificate that already has a matching, usable key beside it, so
+            # there is no longer a key to go asking for here. A certificate
+            # whose key sits somewhere acme_key_beside cannot guess is reached
+            # through the import entry instead, which asks for both paths and
+            # says what is wrong with them. The empty case is still checked,
+            # because the list is rebuilt on every pass of this loop and a file
+            # can go between the building and the picking - but it is a stale
+            # screen rather than a question, so it just goes round again.
+            k=$(acme_key_beside "$p")
+            [[ -n "$k" ]] || continue
+            acme_check_pair "$p" "$k" || { msg "$(t "Not usable" "Не годится")" "${ACME_PAIR_ERR}" 12 78; continue; }
+            yes_no "$(t "Use this certificate" "Использовать этот сертификат")" \
+                   "${p}\n\n$(t "covers  $(acme_cert_names "$p")\nleft    $(acme_cert_left "$p")" \
+                                  "покрывает  $(acme_cert_names "$p")\nосталось   $(acme_cert_left "$p")")" 14 78 || continue
+            cert_reachable "$p" "$k" || continue
+            cert_apply "$CERT_USE" "$KEY_USE" ;;
+        renew)
+            # ACME_ST_NAMES is only read when TLS is on, and this entry is
+            # offered whenever the lineage is there - so with HTTPS off the
+            # names come off the certificate itself rather than leaving the
+            # question asking about nothing at all.
+            local rnames="$ACME_ST_NAMES"
+            [[ -n "$rnames" ]] || rnames=$(acme_cert_names "${ACME_LE}/live/${ACME_ST_LINEAGE}/fullchain.pem")
+            [[ -n "$rnames" ]] || rnames="$ACME_ST_LINEAGE"
+            yes_no "$(t "Renew now" "Продлить сейчас")" \
+                   "$(t "Ask Let's Encrypt for a new certificate for\n${rnames}?\n\nForced, so it happens even when this one is nowhere\nnear expiry - and repeated forcing hits a rate limit." \
+                        "Запросить у Let's Encrypt новый сертификат для\n${rnames}?\n\nПринудительно — то есть даже если до истечения ещё\nдалеко; частые принудительные запросы упираются\nв ограничение частоты.")" 14 76 || continue
+            clear
+            ACME_LOG="$TMP/certbot.log"
+            # Emptied first: a failure before certbot ever runs would otherwise
+            # be explained out of the previous run's output, which is a reason
+            # for something that did not happen this time.
+            : > "$ACME_LOG"
+            if acme_renew_now "$ACME_ST_LINEAGE"; then
+                busy "$(t "Restarting the panel onto the renewed certificate..." \
+                         "Перезапускаем панель на продлённый сертификат...")"
+                "$PANEL_CLI" restart >/dev/null 2>&1
+                cert_issued "$(t "It was renewed and the panel restarted onto it." \
+                                 "Сертификат продлён, панель перезапущена на нём.")"
+            else
+                ACME_FLOW_ERR=$(acme_why_failed)
+                cert_flow_failed
+            fi ;;
+        remove)
+            local -a lname=() litem=()
+            local l n=0 s tag mine what
+            while IFS= read -r l; do
+                [[ -n "$l" ]] || continue
+                lname+=("$l"); (( ++n ))
+                tag="$(acme_cert_names_brief "${ACME_LE}/live/${l}/fullchain.pem" 34)   (${l})"
+                [[ "$l" == "$ACME_ST_LINEAGE" ]] && tag="${tag}   $(t "[IN USE]" "[ИСПОЛЬЗУЕТСЯ]")"
+                litem+=("$n" "$tag")
+            done < <(acme_lineages)
+            (( n )) || { msg "$(t "None" "Ничего нет")" \
+                             "$(t "certbot holds no certificates on this machine." \
+                                  "На этой машине certbot не хранит ни одного сертификата.")"; continue; }
+            s=$(whiptail --backtitle "$BT" --title "$(t "Delete a certificate" "Удаление сертификата")" \
+                --cancel-button "$(t "Back" "Назад")" \
+                --menu "$(t "\nThe files and the renewal config both go." \
+                            "\nУдалятся и файлы, и настройка продления.")" \
+                20 78 8 "${litem[@]}" 3>&1 1>&2 2>&3) || continue
+            [[ "$s" =~ ^[0-9]+$ ]] || continue
+            l="${lname[$((s-1))]}"
+            what=$(cert_label "$l")
+            mine=0; [[ "$l" == "$ACME_ST_LINEAGE" ]] && mine=1
+            # Deleting the one being served is allowed, but not quietly: the
+            # panel has to come off it first, or the next restart finds a
+            # certificate that is no longer there and does not come back.
+            if (( mine && ACME_ST_ON )); then
+                yes_no "$(t "That one is in use" "Этот используется")" \
+                       "$(t "The panel is serving ${what}.\n\nDelete it? The panel goes back to plain HTTP; it\nkeeps running either way." \
+                            "Панель отдаёт ${what}.\n\nУдалить его? Панель вернётся на обычный HTTP;\nработать она не перестанет.")" 13 74 || continue
+                busy "$(t "Putting the panel back on plain HTTP..." \
+                         "Возвращаем панель на обычный HTTP...")"
+                acme_disable > "$TMP/off.txt" 2>&1 \
+                    || { page "$(t "Could not turn HTTPS off - nothing deleted" \
+                                   "Выключить HTTPS не удалось — ничего не удалено")" "$TMP/off.txt" 16 78; continue; }
+            elif (( mine )); then
+                yes_no "$(t "Delete" "Удаление")" \
+                       "$(t "${what^} is the one this panel is configured for,\nthough HTTPS is off.\n\nDelete it?" \
+                            "${what^} — тот, на который настроена эта панель,\nхотя HTTPS сейчас выключен.\n\nУдалить его?")" 12 74 || continue
+            else
+                yes_no "$(t "Delete" "Удаление")" \
+                       "$(t "Delete ${what}?\n\nThe files and its renewal config go with it. This\ncannot be undone, and nothing else on this server\nis touched." \
+                            "Удалить ${what}?\n\nВместе с ним уйдут файлы и настройка продления.\nОтменить это нельзя; больше на сервере ничего\nне тронуто.")" 13 74 || continue
+            fi
+            busy "$(t "Deleting ${what}..." "Удаляем ${what}...")"
+            if acme_delete_lineage "$l" > "$TMP/del.txt" 2>&1; then
+                # The panel's two paths pointed into what has just gone. Left
+                # behind, they are what the next import obligingly fills the
+                # boxes in with.
+                if (( mine )); then
+                    panel_env_set AWG_PANEL_TLS_CERT ""
+                    panel_env_set AWG_PANEL_TLS_KEY  ""
+                fi
+                # Nothing to say: it is off the list this returns to.
+                wipe
+            else
+                # HTTPS came off first, and it stays off: the delete may have
+                # got far enough to take the files with it. Said here because
+                # the panel's address has just changed scheme, and nothing else
+                # on this screen would mention it.
+                (( mine && ACME_ST_ON )) \
+                    && printf '\n%s\n' "$(t "The panel was put back on plain HTTP before this was tried,
+and it has been left there." \
+                                             "Перед этой попыткой панель вернули на обычный HTTP,
+и там она и осталась.")" >> "$TMP/del.txt"
+                page "$(t "Delete failed" "Удалить не удалось")" "$TMP/del.txt" 16 78
+            fi ;;
+        off)
+            yes_no "$(t "Turn HTTPS off" "Выключение HTTPS")" \
+                   "$(t "Serve plain HTTP again?\n\nThe two paths are kept, so turning it back on needs\nnothing retyped. Only sensible behind a proxy that\nterminates TLS itself." \
+                        "Снова отдавать обычный HTTP?\n\nОба пути сохранятся, так что для обратного включения\nничего перенабирать не придётся. Осмысленно только\nза прокси, который сам завершает TLS.")" 13 74 || continue
+            busy "$(t "Restarting the panel on plain HTTP..." \
+                     "Перезапускаем панель на обычном HTTP...")"
+            if acme_disable > "$TMP/off.txt" 2>&1; then
+                wipe
+            else
+                page "$(t "Could not turn HTTPS off" "Выключить HTTPS не удалось")" "$TMP/off.txt" 16 78
+            fi ;;
+        renewal)
+            acme_renewal_report > "$TMP/rn.txt" 2>&1
+            page "$(t "Renewal" "Продление")" "$TMP/rn.txt" 22 88 ;;
+        esac
+    done
+}
+
+# --------------------------------------------------------- diagnostics
+diag_menu() {
+    while true; do
+        local c up=0 it=()
+        iface_present && up=1
+
+        it=(status   "$(t "Tunnel status" "Состояние туннеля")"
+            selftest "$(t "Run a full end-to-end tunnel test" "Полная сквозная проверка туннеля")"
+            peers    "$(t "Raw peer state from the kernel" "Состояние пиров как его видит ядро")"
+            net      "$(t "NAT, forwarding and ip_forward" "NAT, пересылка и ip_forward")"
+            listen   "$(t "Confirm the server is listening" "Убедиться, что сервер слушает")"
+            module   "$(t "Kernel module and DKMS status" "Модуль ядра и состояние DKMS")"
+            config   "$(t "View the server config" "Посмотреть конфигурацию сервера")"
+            logs     "$(t "Recent service log" "Последние записи журнала службы")")
+        # One entry, not two with one of them always dead: a stopped tunnel
+        # cannot be stopped and a running one does not need starting. Restart
+        # only appears alongside the first, because restarting a tunnel that is
+        # down is starting it under a name that does not say so - and it would
+        # get there through awg-quick, leaving the unit inactive over a running
+        # interface, which is the state that makes the next stop a no-op.
+        if (( up )); then
+            it+=(restart "$(t "Restart the tunnel now" "Перезапустить туннель сейчас")"
+                 stop    "$(t "Stop the tunnel" "Остановить туннель")")
+        else
+            it+=(start "$(t "Start the tunnel" "Запустить туннель")")
+        fi
+
+        c=$(whiptail --backtitle "$BT" --title "$(t "Diagnostics" "Диагностика")" \
+            --cancel-button "$(t "Back" "Назад")" \
+            --notags \
+            --default-item "$LAST_DIAG" \
+            --menu "$(t "\nChecks and troubleshooting" "\nПроверки и поиск неисправностей")" 22 74 10 "${it[@]}" \
+            3>&1 1>&2 2>&3) || return 0
+        LAST_DIAG="$c"
+
+        case "$c" in
+        status)
+            collect
+            {   kv 12 "$(t "Interface" "Интерфейс")" "$IFACE"
+                kv 12 "$(t "Address"   "Адрес")"     "$(iface_get Address)"
+                kv 12 "$(t "Network"   "Сеть")" \
+                      "$(subnet_cidr "$(iface_get Address)" || echo "$(t 'unreadable' 'не читается')")   $(t "($(subnet_hosts "$(iface_get Address)") client addresses)" \
+                                                                                                            "(адресов для клиентов: $(subnet_hosts "$(iface_get Address)"))")"
+                kv 12 "IPv6" "$(ipv6_status)"
+                kv 12 "$(t "Port"      "Порт")"      "$(iface_get ListenPort)/udp"
+                kv 12 "MTU" "$(iface_get MTU)"
+                kv 12 "$(t "Clients"   "Клиентов")"  "${#C_NAME[@]}"
+                kv 12 "$(t "Service"   "Служба")" \
+                      "$(systemctl is-active "awg-quick@${IFACE}" 2>/dev/null) / $(systemctl is-enabled "awg-quick@${IFACE}" 2>/dev/null) $(t "at boot" "при загрузке")"
+                kv 12 "$(t "Module"    "Модуль")"    "$(kmod_version_line)"
+            } > "$TMP/st.txt"
+            page "$(t "Tunnel status" "Состояние туннеля")" "$TMP/st.txt" 20 86 ;;
+        selftest) clear; run_selftest; pause_raw ;;
+        peers)    awg show "$IFACE" > "$TMP/pr.txt" 2>&1
+                  page "$(t "Peer state" "Состояние пиров")" "$TMP/pr.txt" 24 88 ;;
+        net)
+            {   printf '  === ip_forward ===\n'; sysctl net.ipv4.ip_forward
+                printf '\n  === NAT (masquerade) ===\n'
+                iptables -t nat -S POSTROUTING | grep -i masq \
+                    || echo "  $(t "(none - clients cannot reach the internet)" \
+                                   "(нет — клиенты не выйдут в интернет)")"
+                printf '\n  === FORWARD ===\n'; iptables -S FORWARD
+            } > "$TMP/n.txt" 2>&1
+            page "$(t "Networking" "Сеть")" "$TMP/n.txt" 24 88 ;;
+        listen)
+            {   printf '  %s %s/udp\n\n' "$(t "Configured port:" "Порт из конфигурации:")" "$(iface_get ListenPort)"
+                ss -ulnp | grep -E "State|$(iface_get ListenPort)" \
+                    || echo "  $(t "NOTHING LISTENING" "НИКТО НЕ СЛУШАЕТ")"
+            } > "$TMP/l.txt" 2>&1
+            page "$(t "Listening sockets" "Открытые сокеты")" "$TMP/l.txt" 18 88 ;;
+        module)
+            {   lsmod | grep -E 'Module|amneziawg'
+                printf '\n  === DKMS ===\n'; dkms status 2>/dev/null
+                printf '\n  === modinfo ===\n'; modinfo amneziawg 2>/dev/null | head -6
+            } > "$TMP/m.txt" 2>&1
+            page "$(t "Kernel module" "Модуль ядра")" "$TMP/m.txt" 22 88 ;;
+        config)
+            # Read-only, and the private key is masked: this is a diagnostic
+            # screen on a box somebody may be sharing over SSH or a recording.
+            sed "s/^\(PrivateKey[[:space:]]*=\).*/\1 $(t '<hidden>' '<скрыт>')/" "$SERVER_CONF" > "$TMP/cf.txt"
+            page "$(t "Server config (read-only)" "Конфигурация сервера (только чтение)")" "$TMP/cf.txt" 24 100 ;;
+        logs) journalctl -u "awg-quick@${IFACE}" -n 80 --no-pager > "$TMP/lg.txt" 2>&1
+              page "$(t "Service log" "Журнал службы")" "$TMP/lg.txt" 24 100 ;;
+        restart)
+            # Not a settings change - the config is the panel's to write. This
+            # is the operational one: reload what is already on disk, for when
+            # the tunnel is wedged and the panel cannot be reached to do it.
+            yes_no "$(t "Restart the tunnel" "Перезапуск туннеля")" \
+                   "$(t "Restart ${IFACE} now?\n\nEvery connected client drops and reconnects. The\nconfiguration is not changed - this only reloads\nwhat is already on disk." \
+                        "Перезапустить ${IFACE} сейчас?\n\nВсе подключённые клиенты отвалятся и переподключатся.\nКонфигурация не меняется — просто перечитывается то,\nчто уже лежит на диске.")" 13 74 || continue
+            restart_iface && msg "$(t "Restarted" "Перезапущен")" \
+                                 "$(t "Tunnel ${IFACE} restarted.\nTraffic counters were saved first by the PreDown hook." \
+                                      "Туннель ${IFACE} перезапущен.\nСчётчики трафика сначала сохранил хук PreDown.")" ;;
+        stop)
+            # So returning to this menu lands on the entry that undoes it
+            # rather than on one that is no longer offered.
+            tunnel_stop && LAST_DIAG=start ;;
+        start)
+            tunnel_start && LAST_DIAG=stop ;;
+        esac
+    done
+}
+
+run_selftest() {
+    local ns=awgselftest port net gw addr mtu conf rc=0
+    port=$(iface_get ListenPort); mtu=$(iface_get MTU)
+    # The whole tunnel network, not three octets and an assumed /24: the client
+    # under test has to be routed the same width the real clients are, or the
+    # test passes on a server nobody outside the first 254 addresses can use.
+    addr=$(iface_get Address)
+    gw=${addr%%,*}; gw=${gw%%/*}
+    if ! net=$(subnet_cidr "$addr"); then
+        printf '%s\n' "$(t "Cannot read the tunnel network from:
+  Address = ${addr}
+Fix it in ${SERVER_CONF}, then re-run this test." \
+                            "Не удалось прочитать сеть туннеля из:
+  Address = ${addr}
+Исправьте это в ${SERVER_CONF} и запустите проверку снова.")"
+        return 1
+    fi
+
+    printf '%s\n' "$(t "=== AWG Panel tunnel self-test ===" \
+                        "=== Самопроверка туннеля AWG Panel ===")"
+    printf '%s %s   %s %s/udp   mtu %s   %s %s\n\n' \
+        "$(t "interface" "интерфейс")" "$IFACE" "$(t "port" "порт")" "$port" \
+        "$mtu" "$(t "network" "сеть")" "$net"
+
+    conf=$(ls "$CONF_DIR"/clients/*.conf 2>/dev/null | head -1)
+    [[ -n "$conf" ]] || { echo "$(t "No client configs - add one first." \
+                                    "Нет ни одной клиентской конфигурации — сначала добавьте клиента.")"; return 1; }
+    printf '%s %s\n\n' "$(t "using client:" "используем клиента:")" "$(basename "$conf" .conf)"
+
+    ip netns del "$ns" 2>/dev/null
+    ip netns add "$ns"
+    awg-quick strip "$conf" \
+      | sed -e "s#^Endpoint = .*#Endpoint = 127.0.0.1:${port}#" \
+            -e "s#^AllowedIPs = .*#AllowedIPs = ${net}#" > "$TMP/st.conf"
+    ip link add stv type amneziawg
+    ip link set stv netns "$ns"
+    if ! ip netns exec "$ns" awg setconf stv "$TMP/st.conf"; then
+        echo "$(t "FAIL: the kernel rejected the client config" \
+                  "СБОЙ: ядро не приняло конфигурацию клиента")"
+        ip netns del "$ns" 2>/dev/null; return 1
+    fi
+    # One `ip addr add` per address: a dual-stack client carries two on one
+    # Address line, and handing the whole line to iproute2 fails with a parse
+    # error that reads as though the config were corrupt.
+    while IFS= read -r stv_addr; do
+        stv_addr="${stv_addr//[[:space:]]/}"
+        [[ -n "$stv_addr" ]] || continue
+        ip netns exec "$ns" ip addr add "$stv_addr" dev stv 2>/dev/null || true
+    done < <(sed -n 's|^Address = ||p' "$conf" | head -1 | tr ',' '\n')
+    ip netns exec "$ns" ip link set mtu "$mtu" up dev stv
+    ip netns exec "$ns" ip route add "${net}" dev stv
+
+    printf -- '%s\n' "$(t "--- handshake and ping ---" "--- рукопожатие и ping ---")"
+    ip netns exec "$ns" ping -c 3 -W 5 "${gw}" || rc=1
+    printf -- '\n%s\n' "$(t "--- full-MTU packet, DF set (must not fragment) ---" \
+                              "--- пакет во весь MTU, флаг DF (фрагментации быть не должно) ---")"
+    ip netns exec "$ns" ping -c 2 -W 5 -M "do" -s $((mtu-28)) "${gw}" || rc=1
+    printf -- '\n%s\n' "$(t "--- resulting state ---" "--- итоговое состояние ---")"
+    ip netns exec "$ns" awg show stv | grep -E 'latest handshake|transfer'
+    ip netns del "$ns" 2>/dev/null
+
+    if (( rc == 0 )); then
+        printf '\n%s\n' "$(t "RESULT: PASS - the tunnel works end to end." \
+                               "ИТОГ: ПРОЙДЕНО — туннель работает от края до края.")"
+    else
+        printf '\n%s\n' "$(t "RESULT: FAIL - see the output above." \
+                               "ИТОГ: НЕ ПРОЙДЕНО — смотрите вывод выше.")"
+    fi
+    return $rc
+}
+
+# ---------------------------------------------------------------- update
+#
+# Hand this terminal to something that is about to replace this file, and never
+# come back to it.
+#
+# bash reads a script in chunks as it runs it, seeking back into the file for
+# each one - so a menu that ran the installer as a child and then carried on was
+# a bash reading the next chunk of a file the installer had just replaced, and
+# what it executed after that was whatever happened to be at the offset it had.
+# exec ends this process at the call instead: nothing of this script is ever
+# read again, because there is no longer a process that would read it. That the
+# replacement happens to be safe on GNU coreutils - install unlinks the
+# destination before creating the new one, so an open fd keeps reading the old
+# inode - is not something to rest a menu on: it is a detail of one
+# implementation of one tool, and the handover costs nothing.
+#
+# The cost is that the menu does not come back afterwards, which is the honest
+# outcome anyway - the menu it would come back to is not the one that started.
+# Both dialogs below say so.
+hand_over() {
+    rm -rf "$TMP"
+    trap - EXIT
+    command clear 2>/dev/null
+    exec "$@"
+}
+
+update_menu() {
+    if [[ ! -x "$UPDATE_CLI" ]]; then
+        msg "$(t "No updater" "Нет средства обновления")" \
+"$(t "This installation has no ${UPDATE_CLI}, so it cannot\ncheck for or install a release by itself.\n\nRun one upgrade from a release bundle or a checkout:\n\n  sudo ./install.sh\n\nEvery later update can then start from right here." \
+      "В этой установке нет ${UPDATE_CLI}, поэтому она не умеет\nсама проверять и ставить новые выпуски.\n\nПроведите одно обновление из архива выпуска или из\nрепозитория:\n\n  sudo ./install.sh\n\nПосле этого все следующие обновления запускаются прямо\nотсюда.")" 16 74
+        return 0
+    fi
+
+    local last=install
+    while true; do
+        busy "$(t "Asking GitHub which release is newest..." \
+                  "Спрашиваем у GitHub, какой выпуск самый свежий...")"
+        # Declared before the eval so the answer stays inside this function
+        # rather than becoming a set of globals that outlive the screen. Two of
+        # them are never read here - the download URLs are the updater's
+        # business, not this menu's - and are named anyway so that eval has
+        # somewhere local to put them.
+        # shellcheck disable=SC2034
+        local R_checked=0 R_reason="" R_current="" R_latest="" R_update_available=0 \
+              R_url="" R_notes="" R_published_at="" R_asset="" R_sums=""
+        eval "$("$UPDATE_CLI" check --sh 2>/dev/null)"
+
+        local head it=()
+        if [[ "$R_checked" != "1" ]]; then
+            # Not an error screen. A server behind a strict egress policy cannot
+            # reach GitHub and is not broken, and the one thing this menu can
+            # still usefully offer such a box is the rebuild below. The reason is
+            # on the screen rather than a menu entry away, because it is the
+            # difference between "no network" and "no release published yet".
+            head=$(t "installed ${R_current:-unknown}   latest: could not check\n\n  ${R_reason}" \
+                     "установлено ${R_current:-неизвестно}   проверить последний выпуск не вышло\n\n  ${R_reason}")
+        elif [[ "$R_update_available" == "1" ]]; then
+            head=$(t "installed ${R_current}   latest ${R_latest}   AN UPDATE IS AVAILABLE" \
+                     "установлено ${R_current}   последний ${R_latest}   ЕСТЬ ОБНОВЛЕНИЕ")
+            it+=(install "$(t "Install ${R_latest} now - this is the update" \
+                              "Установить ${R_latest} сейчас — это и есть обновление")"
+                 notes   "$(t "Read what changed in ${R_latest}" \
+                              "Прочитать, что изменилось в ${R_latest}")")
+        else
+            head=$(t "installed ${R_current}   latest ${R_latest}   up to date" \
+                     "установлено ${R_current}   последний ${R_latest}   всё свежее")
+        fi
+        it+=(rebuild "$(t "Rebuild the module and tools for this kernel" \
+                          "Пересобрать модуль и утилиты под это ядро")"
+             status  "$(t "Where the last update on this server got to" \
+                          "Чем закончилось последнее обновление на этом сервере")")
+
+        local c
+        c=$(whiptail --backtitle "$BT" --title "$(t "Update" "Обновление")" \
+            --cancel-button "$(t "Back" "Назад")" \
+            --notags \
+            --default-item "$last" \
+            --menu "\n  ${head}\n" 19 76 6 "${it[@]}" \
+            3>&1 1>&2 2>&3) || return 0
+        last="$c"
+
+        case "$c" in
+        install)
+            yes_no "$(t "Update to ${R_latest}" "Обновление до ${R_latest}")" \
+"$(t "Install ${R_latest} over ${R_current}?\n\nA full backup is taken first, then the release is\ndownloaded, checked against its published checksum\nand installed. The config, keys, every client, the\naccounts and the traffic history are all kept.\n\nIt takes a few minutes. The panel restarts near the\nend and the tunnel drops for a few seconds, so\nconnected clients reconnect.\n\nThis menu closes and the update takes over the\nterminal - it is one of the things being replaced.\nStart it again with 'awg-menu' when it is done." \
+      "Установить ${R_latest} поверх ${R_current}?\n\nСначала снимается полная резервная копия, затем выпуск\nскачивается, сверяется с опубликованной контрольной\nсуммой и ставится. Конфигурация, ключи, все клиенты,\nучётные записи и история трафика сохраняются.\n\nЗаймёт несколько минут. Ближе к концу перезапустится\nпанель, а туннель на пару секунд ляжет, так что\nподключённые клиенты переподключатся.\n\nЭто меню закроется, и терминал заберёт себе\nобновление — меню как раз одно из того, что\nзаменяется. Запустите его снова командой 'awg-menu',\nкогда всё закончится.")" 22 74 || continue
+            # The update itself runs in its own systemd unit whatever happens
+            # here, so this hands over the *view* of it and not the update: a
+            # dropped SSH session loses the log on the screen and nothing else.
+            hand_over "$UPDATE_CLI" apply ;;
+        notes)
+            {   printf '  %s\n\n' "${R_latest}"
+                [[ -n "$R_published_at" ]] && printf '  %s %s\n' "$(t "published" "опубликован")" "$R_published_at"
+                [[ -n "$R_url" ]] && printf '  %s\n' "$R_url"
+                printf '\n'
+                printf '%s\n' "${R_notes:-$(t "No release notes were published." \
+                                                "Описание выпуска не публиковалось.")}"
+            } > "$TMP/notes.txt"
+            page "$(t "What changed in ${R_latest}" "Что изменилось в ${R_latest}")" "$TMP/notes.txt" 24 84 ;;
+        rebuild)
+            # Not an update: the same version, built again. What it is for is a
+            # kernel that has moved - a DKMS module built against the old one
+            # does not load under the new one, and re-running the stored
+            # installer is what puts that right without downloading anything.
+            if [[ ! -f "$SELF_INSTALL" ]]; then
+                msg "$(t "No stored installer" "Установщик не сохранён")" \
+                    "$(t "This installation predates the stored installer.\n\nRun one upgrade from a checkout or bundle:\n\n  sudo ./install.sh\n\nEvery later rebuild can then start from right here." \
+                         "Эта установка старше, чем привычка сохранять установщик.\n\nПроведите одно обновление из репозитория или архива:\n\n  sudo ./install.sh\n\nПосле этого пересборка запускается прямо отсюда.")" 15 74
+                continue
+            fi
+            yes_no "$(t "Rebuild for this kernel" "Пересборка под это ядро")" \
+"$(t "Re-run the stored installer?\n\nRebuilds the kernel module and the tools from the\npinned releases and restarts the tunnel - live\nsessions drop for a few seconds. Do this after a\nkernel upgrade.\n\nIt installs no new version: the panel and everything\nelse stay exactly as they are. For a newer release,\nuse the entry above.\n\nThis menu closes and the installer takes over the\nterminal. Start it again with 'awg-menu' when it is\ndone." \
+      "Запустить сохранённый установщик заново?\n\nОн пересоберёт модуль ядра и утилиты из закреплённых\nверсий и перезапустит туннель — живые сеансы лягут\nна пару секунд. Делайте это после обновления ядра.\n\nНикакой новой версии не ставится: панель и всё\nостальное остаются как есть. За свежим выпуском —\nв пункт выше.\n\nЭто меню закроется, и терминал заберёт себе\nустановщик. Запустите меню снова командой\n'awg-menu', когда всё закончится.")" 22 74 || continue
+            hand_over bash "$SELF_INSTALL" ;;
+        status)
+            "$UPDATE_CLI" status > "$TMP/upst.txt" 2>&1
+            printf '\n  %s\n' "$(t "--- log ---" "--- журнал ---")" >> "$TMP/upst.txt"
+            "$UPDATE_CLI" log -n 400 >> "$TMP/upst.txt" 2>&1
+            page "$(t "Last update" "Последнее обновление")" "$TMP/upst.txt" 24 100 ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------- language
+# What this menu speaks, and what it will still be speaking after a reboot.
+#
+# The installer asks the same question once and writes the answer down where
+# lib/i18n.sh looks for it; this is the other end of that. It exists for the
+# two cases the install-time question cannot cover: a server set up by somebody
+# who reads English and now run by somebody who does not, and an operator who
+# pressed Enter past the question and got the language they did not want.
+#
+# The screen is bilingual whichever language it is currently in - the title
+# names both, and each entry is named in its own alphabet. That is deliberate,
+# and for the same reason the installer's question prints both lines at once:
+# the person who most needs this screen is the one who cannot read the one it
+# is in.
+lang_menu() {
+    local c cur="$LANG_CHOICE"
+    c=$(whiptail --backtitle "$BT" --title "Language / Язык" \
+        --cancel-button "$(t "Back" "Назад")" \
+        --notags \
+        --default-item "$cur" \
+        --menu "$(t "\nThis menu and every screen in it." \
+                    "\nЭто меню и все его экраны.")\n" 13 62 2 \
+        en "English" \
+        ru "Русский" \
+        3>&1 1>&2 2>&3) || return 0
+    [[ "$c" == "$cur" ]] && return 0
+
+    if lang_save "$c"; then
+        # LANG_CHOICE is the new language by now, so everything below - the
+        # backtitle, this dialog, the menu it returns to - comes out in it.
+        set_backtitle
+        msg "Language / Язык" \
+            "$(t "The menu is in English from here, and it opens in English\nnext time too: the choice is written to\n${LANG_FILE}.\n\nThe web panel has its own language switch, in the\nbrowser. This one does not touch it." \
+                 "Дальше меню на русском, и в следующий раз оно откроется\nтоже на русском: выбор записан в\n${LANG_FILE}.\n\nУ веб-панели свой переключатель языка, в браузере.\nЭтот его не трогает.")" 15 74
+    else
+        # Nothing was written and nothing was switched, so this comes out in
+        # the language the menu is still in - which is the right one, because
+        # it is the one the reader has been looking at all along.
+        msg "$(t "Not changed" "Не изменено")" \
+            "$(t "Could not write ${LANG_FILE}, so the language is\nunchanged. A read-only /etc, or a config directory\nthis install never created, is the usual reason." \
+                 "Не удалось записать ${LANG_FILE}, язык остался прежним.\nОбычная причина — /etc только для чтения или каталог\nконфигурации, которого эта установка не создавала.")" 13 74
+    fi
+}
+
+# --------------------------------------------------------------- main
+main_menu() {
+    while true; do
+        collect
+        local c on=0 i pub
+        for i in "${!C_NAME[@]}"; do
+            pub="${C_PUB[$i]}"; is_online "${D_HS[$pub]:-0}" && (( ++on ))
+        done
+        local state; state=$( (( IFACE_UP )) && t running работает || t STOPPED ОСТАНОВЛЕН )
+
+        # Switching the tunnel off is an operation on the server itself, like
+        # updating it or taking it off again, so it belongs on this screen
+        # rather than only among the diagnostics - somebody stopping the
+        # service for a maintenance window is not troubleshooting anything.
+        # Diagnostics keeps its copy because that is where an admin already is
+        # when a check has just told them the tunnel needs to go down.
+        #
+        # One entry, not two with one of them always dead: a stopped tunnel
+        # cannot be stopped and a running one does not need starting. What it
+        # says is what it will do.
+        local it=(panel "$(t "Web panel: port, password, URL, services" \
+                             "Веб-панель: порт, пароль, адрес, службы")"
+                  diag  "$(t "Diagnostics, status and self-test" \
+                             "Диагностика, состояние и самопроверка")")
+        if (( IFACE_UP )); then
+            it+=(stop "$(t "Stop the tunnel: every client drops until it is started" \
+                           "Остановить туннель: клиенты отвалятся до запуска")")
+        else
+            it+=(start "$(t "Start the tunnel: it is stopped right now" \
+                            "Запустить туннель: сейчас он остановлен")")
+        fi
+        it+=(update    "$(t "Update: check for a new release and install it" \
+                            "Обновление: проверить и поставить новый выпуск")"
+             lang      "$(t "Language: English (switch to Русский)" \
+                            "Язык: Русский (switch to English)")"
+             about     "$(t "About this installation" "Об этой установке")"
+             uninstall "$(t "Remove AWG Panel and everything it holds" \
+                            "Удалить AWG Panel и всё, что в ней лежит")")
+
+        c=$(whiptail --backtitle "$BT" --title "$(t "Main menu" "Главное меню")" \
+            --cancel-button "$(t "Quit" "Выход")" \
+            --notags \
+            --default-item "$LAST_MAIN" \
+            --menu "$(t "\n  ${#C_NAME[@]} client(s), ${on} online     port $(iface_get ListenPort)/udp     ${state}\n" \
+                        "\n  клиентов: ${#C_NAME[@]}, онлайн: ${on}     порт $(iface_get ListenPort)/udp     ${state}\n")" \
+            20 74 8 "${it[@]}" \
+            3>&1 1>&2 2>&3) || break
+        LAST_MAIN="$c"
+
+        case "$c" in
+            panel)   panel_menu ;;
+            diag)    diag_menu ;;
+            # As in Diagnostics: leave the cursor on the entry that undoes it.
+            stop)    tunnel_stop  && LAST_MAIN=start ;;
+            start)   tunnel_start && LAST_MAIN=stop ;;
+            update)  update_menu ;;
+            lang)    lang_menu ;;
+            about)
+                # One column width per language, because the Russian labels are
+                # the longer ones and a column that fits them leaves the English
+                # table looking spaced out for no reason.
+                local w; w=$(t 14 18)
+                {   printf '  %s %s\n\n' "$(t "AWG Panel on" "AWG Panel на")" "$(hostname)"
+                    kv "$w" "$(t "Interface"     "Интерфейс")"        "$IFACE"
+                    kv "$w" "$(t "Listen port"   "Порт приёма")"      "$(iface_get ListenPort)/udp"
+                    kv "$w" "$(t "Tunnel MTU"    "MTU туннеля")"      "$(iface_get MTU)"
+                    kv "$w" "$(t "Clients"       "Клиентов")"         "${#C_NAME[@]}"
+                    printf '\n'
+                    kv "$w" "$(t "Server config" "Конфиг сервера")"   "$SERVER_CONF"
+                    kv "$w" "$(t "Client config" "Конфиги клиентов")" "$CONF_DIR/clients/"
+                    kv "$w" "$(t "Settings"      "Настройки")"        "$ENV_FILE"
+                    kv "$w" "$(t "Language"      "Язык")"             "${LANG_CHOICE}   ${LANG_FILE}"
+                    printf '\n  %s\n' "$(t "Kernel module (fast path, not userspace Go):" \
+                                              "Модуль ядра (быстрый путь, а не Go в пространстве пользователя):")"
+                    # Two narrower, because this row is indented two further:
+                    # the values down the screen all have to start in the same
+                    # column whether their label is nested under a heading or
+                    # not.
+                    printf '    %s%s\n' "$(pad "$(t "running" "загружен")" "$(( w - 2 ))")" "$(kmod_version_line)"
+                    modinfo amneziawg 2>/dev/null | grep -E '^filename' | sed 's/^/    /'
+                    printf '\n'
+                    if [[ -x "$PANEL_CLI" ]]; then
+                        kv "$w" "$(t "Web panel" "Веб-панель")" "$("$PANEL_CLI" url 2>/dev/null)"
+                        kv "$w" "" "$(t "clients, quotas and traffic are managed there" \
+                                        "клиенты, квоты и трафик управляются там")"
+                        kv "$w" "TLS" "$(acme_state_line)"
+                    else
+                        kv "$w" "$(t "Web panel" "Веб-панель")" \
+                                "$(t "MISSING - no client can be added or revoked" \
+                                     "ОТСУТСТВУЕТ — клиента нечем добавить или отозвать")"
+                        kv "$w" "" "$(t "put it back with: sudo ./install.sh" \
+                                        "вернуть её: sudo ./install.sh")"
+                    fi
+                    printf '\n  %s  awg-panel help\n' "$(t "From a shell:" "Из командной строки:")"
+                } > "$TMP/ab.txt"
+                page "$(t "About" "Об установке")" "$TMP/ab.txt" 22 84 ;;
+            uninstall)
+                # Two dialogs, and the first one is about the backup rather
+                # than about the uninstall. What goes is not only the software:
+                # it is the server key, every client's key, and the panel's
+                # database, and the moment to take a copy of those is while the
+                # panel is still up to hand one out. Asking afterwards would be
+                # asking too late.
+                yes_no_danger "$(t "Everything goes" "Уходит всё")" \
+                    "$(t "All of it goes: the tunnel, the module, the tools, the\nweb panel and its certificate - and with them the server\nkey, every client's key, the accounts and the traffic\nhistory.\n\nEvery config already handed out stops working, and none\nof it can be recovered afterwards.\n\nNeed any of it? Take a backup from the panel first\n(Settings, then Backup).\n\nGo on to the uninstaller?" \
+                         "Уходит всё: туннель, модуль, утилиты, веб-панель и её\nсертификат — а вместе с ними ключ сервера, ключи всех\nклиентов, учётные записи и история трафика.\n\nВсе уже розданные конфигурации перестанут работать, и\nничего из этого потом не восстановить.\n\nЧто-то из этого нужно? Сначала снимите резервную копию\nв панели (Настройки, затем Резервная копия).\n\nПерейти к деинсталлятору?")" 19 74 || continue
+                clear
+                /usr/local/bin/awg-uninstall
+                # Held on the screen until it has been read. The uninstaller
+                # ends with a report of what went and what, if anything, is
+                # still here, and this menu's exit trap clears the terminal on
+                # the way out - so without the pause the one summary of the
+                # whole operation would be wiped a fraction of a second after
+                # it appeared, on the one path where nothing can be run again
+                # afterwards to ask.
+                pause_raw
+                exit 0 ;;
+        esac
+    done
+}
+
+main_menu

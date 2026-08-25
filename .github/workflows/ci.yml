@@ -1,0 +1,347 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # -qq is what made the 6-hour hang unreadable: it mutes the mirror
+      # retries and the "Waiting for cache lock" notice alike, so a stall and a
+      # fast success look the same in the log until the run is killed. -q keeps
+      # the progress bars out and leaves the diagnosis in. The two options are
+      # the wait limits apt does not have by default - Retries covers a mirror
+      # that drops the connection, Lock::Timeout covers unattended-upgrades
+      # still holding dpkg when the job starts. The step costs 7 seconds when
+      # it is healthy, so a 5-minute ceiling is slack, not a budget.
+      - name: Install shellcheck
+        timeout-minutes: 5
+        run: |
+          # The image already carries it, at the same version the archive
+          # would hand back, so the apt path below is reached only if that
+          # ever stops being true. Printing the version is the point of
+          # taking it on trust: it is what a run that starts failing on new
+          # warnings gets diagnosed from.
+          if command -v shellcheck >/dev/null; then
+            shellcheck --version
+            exit 0
+          fi
+          sudo apt-get update -q \
+            -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60
+          sudo apt-get install -y -q shellcheck \
+            -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60
+
+      - name: Syntax check
+        run: |
+          for f in install.sh build.sh fetch-sources.sh get.sh tests/hooks.sh \
+                   tests/obfs.sh tests/deps.sh tests/basepath.sh tests/panel.sh \
+                   tests/subnet6.sh tests/recovery.sh tests/shaper.sh \
+                   tests/uninstall.sh tests/acme.sh tests/bundle.sh \
+                   tests/prompt.sh tests/detect.sh tests/power.sh \
+                   tests/update.sh tests/i18n.sh tests/ports.sh tests/get.sh \
+                   tests/kernel.sh tests/report.sh tests/conf.sh \
+                   panel/install-panel.sh panel/lock-deps.sh \
+                   panel/fetch-wheels.sh lib/*.sh \
+                   bin/awg-menu bin/awg-uninstall bin/awg-panel bin/awg-update; do
+            bash -n "$f"
+          done
+
+      # -x follows the lib/ modules the tools source, so cross-file variable
+      # and function references are checked for real instead of waived.
+      - name: Shellcheck
+        run: |
+          shellcheck -x -S warning install.sh build.sh fetch-sources.sh get.sh \
+            tests/hooks.sh tests/obfs.sh tests/deps.sh tests/basepath.sh \
+            tests/panel.sh \
+            tests/subnet6.sh tests/recovery.sh tests/shaper.sh tests/uninstall.sh \
+            tests/acme.sh tests/bundle.sh tests/prompt.sh tests/detect.sh \
+            tests/power.sh tests/update.sh tests/i18n.sh tests/ports.sh \
+            tests/get.sh tests/kernel.sh tests/report.sh tests/conf.sh \
+            panel/install-panel.sh panel/lock-deps.sh panel/fetch-wheels.sh lib/*.sh \
+            bin/awg-menu bin/awg-uninstall bin/awg-panel bin/awg-update
+
+      # awg0.conf carries two hooks that call the panel, and every server
+      # upgrading past this point has them pointing at the retired CLI. The
+      # repair runs unattended, against the file holding every client's key.
+      - name: The tunnel hooks migrate correctly
+        run: tests/hooks.sh
+
+      # The IPv6 prefix is derived twice - once in bash for the tools, once in
+      # Python for the panel - and an address has more than one correct
+      # spelling, so "both are valid" is not enough: they have to produce the
+      # same string. Runs here rather than in the panel job because
+      # awg/subnet6.py needs nothing but the standard library.
+      - name: The two IPv6 derivations agree
+        run: tests/subnet6.sh
+
+      # awg0.conf is read twice - by awk for the menu and the installer, by
+      # awg/conf.py for the panel - and the two disagreed about an indented
+      # section header, a key in another case, a comment on the end of a value
+      # and a peer with two AllowedIPs lines. Every one of those is a file
+      # somebody has edited, which is the only kind this has to be careful
+      # about.
+      - name: The two config parsers agree
+        run: tests/conf.sh
+
+      # The secret path is drawn once, on a fresh install, with nobody watching,
+      # and a short or repeated one still produces a panel that comes up and
+      # works - so nothing but this would notice.
+      - name: The secret base path is 20 random characters
+        run: tests/basepath.sh
+
+      # /etc/awg-panel.env is where the panel is told what to listen on and
+      # which certificate to serve, and the function that writes it used to
+      # hand the value to sed as part of an expression. install.sh has already
+      # lost an upgrade to a `|` reaching sed that way, so this checks the
+      # values nobody passes yet rather than the ones they do.
+      - name: The panel's settings survive being written
+        run: tests/panel.sh
+
+      # The account name and the password are settled in one script and printed
+      # by another, and they travel through a file. install.sh used to eval each
+      # line of it after matching the key, which is sourcing one line at a time.
+      # This checks that a password comes back byte for byte and that a line
+      # nobody wrote is dropped rather than run.
+      - name: The credentials survive the handoff
+        run: tests/report.sh
+
+      # An upgrade is allowed to fail. It is not allowed to hand back a machine
+      # that was working before it ran and is offline after - which is what a
+      # PostUp hook that can abort the bring-up, and an installer with no
+      # recovery path, between them produced.
+      - name: A failed install leaves the tunnel up
+        run: tests/recovery.sh
+
+      # The panel's own suite fakes tc and checks which commands awg/shaper.py
+      # builds, which is all it can do without root. Whether the kernel accepts
+      # them is the other half, and it is the half that fails silently: a u32
+      # key read at the wrong offset classifies nothing and returns success.
+      # The runner has sudo and can make a namespace, so the real thing is
+      # checked here, the way recovery.sh checks a real bring-up. Like
+      # subnet6.sh, this sits in the shell job because awg/shaper.py needs
+      # nothing but the standard library.
+      - name: The shaping commands are ones the kernel takes
+        run: sudo tests/shaper.sh
+
+      # A renewal timer and a deploy hook outlive an uninstall silently: there
+      # is no panel left for either to affect, so nothing an admin looks at
+      # ever shows that they are still running.
+      - name: The uninstaller takes the certificate with it
+        run: tests/uninstall.sh
+
+      # A certificate the menu can read and the service cannot is invisible
+      # from the outside. The menu lists it, the admin picks it, and the only
+      # symptom is a panel that briefly does not come back - so nothing but a
+      # test notices that the two are looking at different filesystems.
+      - name: A certificate the service cannot see is made one it can
+        run: tests/acme.sh
+
+      # Type-ahead from the minutes of building before a question is asked used
+      # to be read as the answer to it. Nothing about that is visible on the
+      # side that matters: a stray "y" reads as agreeing to a certificate, and a
+      # stray line at the password question reads as the password.
+      - name: A keystroke typed before a question is not its answer
+        run: tests/prompt.sh
+
+      # Two things the installer works out about a machine rather than being
+      # told, both of which are wrong without saying so. An egress interface
+      # read off the wrong field goes into iptables rules that match nothing,
+      # so the tunnel comes up and no client reaches anything past it; an
+      # upgrade that misreads the IPv6 an existing config carries writes a
+      # prefix into clients.env that the interface is not on.
+      - name: What the installer reads off the machine
+        run: tests/detect.sh
+
+      # A stop that reports success and leaves every client connected is the one
+      # failure an operator has no way to see, and it is what `systemctl stop`
+      # does against the inactive-unit-over-a-running-tunnel state every install
+      # of this leaves behind.
+      # The installer speaks a second language, and the way that breaks is
+      # not a mistranslation. It is the two languages drifting into different
+      # installs: a message with only one half, a summary column that lines up
+      # in English and not in Russian, a prompt that offers an answer in
+      # Russian and then will not take it. The last of those is why the yes/no
+      # checks in here run under LC_ALL=C - bash cannot lowercase Д without a
+      # UTF-8 locale, and a minimal server image has none.
+      - name: The second language is a translation, not a fork
+        run: tests/i18n.sh
+
+      - name: Stopping the tunnel stops the tunnel
+        run: tests/power.sh
+
+      # The module is built for `uname -r`, and a box that has taken a kernel
+      # upgrade since its last reboot is not going to be running `uname -r`
+      # for much longer. Nothing about that failure explains itself: the
+      # install succeeds, the tunnel works, and the reboot everybody performs
+      # afterwards comes back with no module on the disk at all.
+      - name: The module is built for the kernel that boots next
+        run: tests/kernel.sh
+
+      # Both ports an install chooses can already belong to something else, and
+      # neither failure explains itself afterwards: gunicorn writes "address
+      # already in use" into a journal nobody is reading yet, and awg-quick
+      # leaves an interface that answers no packet. The warning at the moment
+      # the number is typed is the only place it is ever said, so a probe that
+      # quietly matched nothing would be invisible - it looks exactly like a
+      # machine where every port is free.
+      - name: A port something else is on is reported as one
+        run: tests/ports.sh
+
+      # A bundle is a shell script with a tar.gz appended, so `bash -n` on the
+      # whole file is not a thing that can be asked any more - tests/bundle.sh
+      # checks the shell half of it, and checks the property the appended
+      # archive exists for: that unpacking costs memory the payload's size has
+      # no part in.
+      - name: The bundle streams its payload
+        run: tests/bundle.sh
+
+      # The one path that reaches out to the internet and then runs what comes
+      # back as root. What is checked here is that it refuses to: a bundle whose
+      # checksum does not match, a tag that is a pre-release, a feed that cannot
+      # be reached.
+      - name: The updater refuses a release it cannot vouch for
+        run: tests/update.sh
+
+      # The other half of that: the script the install command pipes into a
+      # root shell. It is the least defensible thing here - downloaded over the
+      # public internet and executed unread - so every reason it should stop
+      # before handing bash a file is checked, and so is the property that a
+      # truncated copy of it does nothing at all.
+      - name: The one-line installer refuses a bundle it cannot vouch for
+        run: tests/get.sh
+
+      - name: Build and smoke-test the bundle
+        run: |
+          ./build.sh
+          bash dist/awg-panel.sh --help >/dev/null
+          ./build.sh --with-panel -o dist/install-with-panel.sh
+          bash dist/install-with-panel.sh --help >/dev/null
+          ./install.sh --help >/dev/null
+          bin/awg-uninstall --help >/dev/null
+          panel/install-panel.sh --help >/dev/null
+
+  panel-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The built SPA is needed, not optional: test_spa_csp.py checks that the
+    # shell's inline scripts carry the nonce its own Content-Security-Policy
+    # announces, and it can only do that against a real index.html. Without
+    # this the test skips and the panel can ship with a policy that blocks its
+    # own bootstrap.
+    needs: panel-frontend
+    defaults:
+      run:
+        working-directory: panel
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: panel-frontend-dist
+          path: panel/frontend/dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: panel/requirements-dev.lock
+
+      # The same locks a server installs, checked the same way. This step used
+      # to be `pip install -r requirements.txt` followed by an unbounded
+      # `pip install pytest pytest-django ruff`, which meant the run that was
+      # supposed to approve a release resolved its own dependencies fresh every
+      # time: a commit could pass in the morning and fail in the afternoon
+      # because a formatter shipped a minor, and neither result said anything
+      # about the code. The development lock is a superset of the runtime one,
+      # so this installs what production gets plus the tools to test it.
+      - name: Install
+        run: |
+          pip install --require-hashes -r requirements-bootstrap.lock
+          pip install --require-hashes -r requirements-dev.lock
+
+      # Nothing above notices a range widened without regenerating, or a lock
+      # that quietly lost its hashes. This does, and it checks the pins rather
+      # than re-resolving them, so it stays quiet on the days upstream
+      # publishes something.
+      - name: Dependency pins are intact
+        working-directory: .
+        run: tests/deps.sh
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      # No kernel module and no awg binary on the runner: everything has to
+      # pass against the mock controller, which is the same path `make dev`
+      # uses on a laptop.
+      - name: The SPA really was downloaded
+        run: test -f frontend/dist/index.html
+
+      - name: Tests
+        env:
+          AWG_MOCK: "1"
+        run: pytest -q
+
+      - name: Migrations are complete
+        env:
+          AWG_MOCK: "1"
+        run: python manage.py makemigrations --check --dry-run
+
+      # The shell and the panel each draw their own obfuscation profiles, so
+      # they cannot be compared output for output. This checks the thing that
+      # matters instead: that what lib/obfs.sh produces passes the validator the
+      # panel saves through, and parses as the protocol each decoy claims to be.
+      - name: The shell generator agrees with the panel
+        working-directory: .
+        run: tests/obfs.sh
+
+  panel-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: panel/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # From .nvmrc, so the version that builds the released bundle is a fact
+      # in the tree rather than a string in a workflow file - install-panel.sh
+      # reads the same file to tell an operator when their node is not this one.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: panel/frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: panel/frontend/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Types
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      # The Python half has had `ruff format --check` since the beginning and
+      # the frontend never had its counterpart, so prettier drifted here for as
+      # long as nobody looked: six files stayed as a prettier older than the
+      # lockfile's had left them, two were never run through it at all, and
+      # nothing anywhere said so.
+      - name: Format
+        run: npm run format:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload the built UI
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-frontend-dist
+          path: panel/frontend/dist
+          retention-days: 7

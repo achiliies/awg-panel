@@ -1,0 +1,43 @@
+# What the panel is willing to run against. NOT what gets installed.
+#
+# Nothing installs from this file. install-panel.sh, the Dockerfile and CI all
+# install from requirements.lock, which pins every package - transitive ones
+# included - to one exact version and the sha256 of every file pip is allowed
+# to download. This file is the input those pins were resolved from, and the
+# ranges are the standing permission for where the next resolve may land.
+#
+# The distinction is the point. Ranges alone meant two servers installed a
+# month apart ran different code, chosen by whatever PyPI happened to be
+# serving, and neither had been tested here. A range like django-axes>=6.5,<9
+# spans three major versions, and the transitive packages - the majority of
+# what actually gets installed - were named nowhere at all, so they had no
+# bound of any kind.
+#
+# So a dependency moves when someone decides it moves:
+#
+#     ./lock-deps.sh && make test        # then commit both locks
+#
+# Security fixes arrive the same way, in a release, having been run against
+# the test suite first - not by an unattended re-run on someone's VPS picking
+# up whatever was newest that morning.
+#
+# Keep this list small and, where there is a choice, pure Python. Every
+# compiled package needs a wheel per architecture and per interpreter version,
+# and release.yml ships those wheels inside the installer so servers need no
+# PyPI at all: qrcode[pil] was replaced by segno for exactly this reason, and
+# it took the bundle from 79 MB of wheels to 29 MB on its own.
+#
+# Mirrors the dependencies list in pyproject.toml; tests/deps.sh fails the
+# build if the two ever disagree. Development tools (pytest, pytest-django,
+# ruff) live in the dev extra there and are deliberately not installed on
+# servers.
+
+Django>=5.2,<6.0
+djangorestframework>=3.15.2,<3.17
+django-axes>=6.5,<9
+django-otp>=1.5,<2
+segno>=1.6,<2
+argon2-cffi>=23.1,<26
+cryptography>=42.0,<47
+gunicorn>=22.0,<24
+whitenoise>=6.6,<7

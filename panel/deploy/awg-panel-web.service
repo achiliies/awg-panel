@@ -1,0 +1,42 @@
+[Unit]
+Description=AWG Panel (HTTP)
+Documentation=file:///opt/awg-panel/../docs/PANEL.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# Root, not CAP_NET_ADMIN alone: the panel reads and rewrites the 0600
+# server config and client configs in /etc/amnezia/amneziawg, and calls
+# awg-quick, which needs the same privileges the CLI tools do.
+User=root
+WorkingDirectory=/opt/awg-panel
+EnvironmentFile=/etc/awg-panel.env
+ExecStartPre=/opt/awg-panel/.venv/bin/python manage.py migrate --noinput
+ExecStart=/opt/awg-panel/.venv/bin/gunicorn -c deploy/gunicorn.conf.py awgui.wsgi:application
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillMode=mixed
+
+# SQLite creates db.sqlite3 (and its -wal/-shm) under the process umask, and
+# that file holds the admin's password hash and the TOTP seeds. Everything else
+# the panel writes is explicitly 0600; this is what makes the database match
+# without having to chmod the sidecars as they appear.
+UMask=0077
+
+# Declared here as well as on the collector so the reader can start first and
+# find the directory already there. See that unit for why it is preserved.
+RuntimeDirectory=awg-panel
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectKernelTunables=no
+ReadWritePaths=/etc/amnezia /var/lib/awg-panel /etc/awg-panel.env /run
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,33 @@
+# Python. No trailing slash on .venv: a worktree is given a symlink to the one
+# here rather than a copy of its own, and a directory pattern does not match a
+# symlink - which left every worktree reporting an untracked file it did not
+# create, and made "is anything uncommitted here?" a question with no answer.
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Where lock-deps.sh keeps the pinned uv it resolves the locks with. Its own
+# venv on purpose, so the resolver never becomes one of the things resolved.
+.lockgen/
+
+# 31 MB of wheels that fetch-wheels.sh downloads from the locks and release.yml
+# rebuilds on every tag. The locks name and hash every one of them, so the
+# files themselves carry nothing the repository does not already record.
+wheels/
+
+# Node and the built SPA. dist/ is a release artifact: install-panel.sh uses it
+# when present, and the CI job publishes it, but it is never committed.
+node_modules/
+frontend/dist/
+
+# Runtime state. On a server these live in /var/lib/awg-panel; here they are
+# whatever `make dev` and `make test` left behind.
+db.sqlite3
+staticfiles/
+.dev/
+# `make demo` deletes this on the way out and again on the way in, so it should
+# never be here to ignore. Listed for the run that was killed with -9, or that
+# went down with the machine.
+.demo/

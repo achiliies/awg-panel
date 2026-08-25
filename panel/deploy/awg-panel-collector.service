@@ -1,0 +1,40 @@
+[Unit]
+Description=AWG Panel (traffic collector and quota enforcement)
+After=network-online.target
+Wants=network-online.target
+# Ordering only. The web UI is useful even when the collector is stopped;
+# it just shows no live rates and stops enforcing quotas.
+Before=awg-panel-web.service
+
+[Service]
+Type=exec
+User=root
+WorkingDirectory=/opt/awg-panel
+EnvironmentFile=/etc/awg-panel.env
+ExecStart=/opt/awg-panel/.venv/bin/python manage.py collector
+Restart=on-failure
+RestartSec=3
+# The collector flushes the shared traffic.db on SIGTERM; give it room so a
+# restart never loses a counter interval.
+TimeoutStopSec=20
+
+# The collector opens the same SQLite file as the web unit and may be the
+# process that creates a -wal beside it, so it needs the same umask.
+UMask=0077
+
+# /run/awg-panel, where the live blob is rewritten every couple of seconds.
+# Preserved because both units declare it and either may be restarted alone:
+# the default would delete the directory out from under whichever is still
+# running. A reboot clears it, which is the whole point of putting it here.
+RuntimeDirectory=awg-panel
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/etc/amnezia /var/lib/awg-panel /run
+
+[Install]
+WantedBy=multi-user.target

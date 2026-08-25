@@ -1,0 +1,275 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must already exist)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Resolved once, here, and read out of the environment by the steps that
+    # need it. Written into each `run:` instead, it was GitHub pasting the value
+    # into the script before bash ever saw it - so the shell was parsing the tag
+    # rather than receiving it, and a tag containing shell syntax would have run
+    # as part of the release. Only somebody with write access can push a tag or
+    # start this workflow, so this is a fence rather than a hole being closed;
+    # it is also the one place where "only trusted people can reach it" stops
+    # being much of an argument, since what it protects is the artifacts
+    # everyone else downloads.
+    #
+    # The `${{ }}` further down are inputs to actions and the text of the
+    # release notes, not shell, and are left as they are.
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # The same .nvmrc CI builds with: a release bundle compiled by a
+      # different toolchain than the one every test ran against is a bundle
+      # nothing has actually approved.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: panel/frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: panel/frontend/package-lock.json
+
+      # Built here so target servers never need Node: install-panel.sh uses a
+      # prebuilt frontend/dist when it finds one, and only falls back to
+      # installing Node and compiling on the server when it does not.
+      - name: Build the panel UI
+        working-directory: panel/frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Every wheel the locks name, for both architectures and every
+      # interpreter install-panel.sh accepts. build.sh packs the directory into
+      # the with-panel bundle, which is what lets a server install without
+      # reaching an index at all. Never committed: it is 31 MB rebuilt from the
+      # locks, which already name and hash every file in it.
+      - name: Fetch the Python wheels
+        run: panel/fetch-wheels.sh
+
+      # The kernel module and tools source at the commits install.sh pins.
+      # build.sh packs this into the bundle, so a server never has to reach
+      # github.com to build the module. Never committed: it is upstream's source,
+      # reproduced from the pins, and the fetch verifies both commits before it lands.
+      - name: Fetch the upstream sources
+        run: ./fetch-sources.sh
+
+      - name: Version stamp
+        run: |
+          printf '%s\n' "${TAG#v}" > panel/VERSION
+
+      - name: Build the release artifacts
+        run: |
+          mkdir -p out
+
+          # Single-file installer carrying the panel with its prebuilt UI.
+          ./build.sh --with-panel -o "out/awg-panel.sh"
+
+          # Source tarball with the built UI and the wheels included, for people
+          # who would rather read what they run.
+          #
+          # --anchored on the first two, because tar's excludes match any path
+          # component otherwise: a bare --exclude=dist quietly took
+          # panel/frontend/dist with it, so this tarball had never once carried
+          # the built UI it claims to. The rest stay unanchored deliberately -
+          # '*/node_modules' has to match at any depth.
+          tar --exclude-vcs \
+              --anchored \
+              --exclude=./out \
+              --exclude=./dist \
+              --no-anchored \
+              --exclude=panel/.venv \
+              --exclude=panel/.lockgen \
+              --exclude=panel/.dev \
+              --exclude='*/node_modules' \
+              --exclude='*/__pycache__' \
+              --exclude='*.pyc' \
+              --exclude=panel/.pytest_cache \
+              --exclude=panel/.ruff_cache \
+              --transform "s,^\.,awg-panel-${TAG#v}," \
+              -czf "out/awg-panel-${TAG#v}.tar.gz" .
+
+          # The script the install command pipes into a root shell. Published
+          # as an asset rather than served from the branch, so the URL people
+          # paste points at a file that belongs to a release and cannot change
+          # under them - and so that it lands in the SHA256SUMS below like
+          # everything else here.
+          cp get.sh out/get.sh
+
+          (cd out && sha256sum * > SHA256SUMS)
+          ls -la out
+
+          # The names awg-update asks for, spelled once in awg/release.py and
+          # once in the filenames above. An update on every existing server
+          # resolves the bundle out of this release's asset list by name, so a
+          # rename here is not a cosmetic change - it is an update that reports
+          # "this release carries no installer" on machines nobody is watching.
+          # get.sh asks for the same two files by the same two names, and it
+          # asks for them on a machine with nothing installed on it yet - so a
+          # rename that missed it would not break an update, it would break
+          # every first install.
+          for want in $(sed -n 's/^ASSET_[A-Z]* = "\(.*\)"$/\1/p' panel/awg/release.py); do
+            test -f "out/$want" || { echo "release is missing $want" >&2; exit 1; }
+            grep -q "ASSET_[A-Z]*=\"$want\"" out/get.sh \
+              || { echo "get.sh does not ask for $want" >&2; exit 1; }
+          done
+          test -f out/get.sh || { echo "release is missing get.sh" >&2; exit 1; }
+
+      - name: Smoke-test the artifacts
+        run: |
+          # A bundle is a shell prologue with a tar.gz appended after a marker
+          # line, so both halves are read on their own terms: the prologue is
+          # the only part `bash -n` can be pointed at, and the archive is
+          # unpacked the way the bundle itself does it - streamed from the
+          # file, never held in memory. tests/bundle.sh checks that property
+          # under a memory limit; here it is simply how the payload is reached.
+          prologue() { awk -v m="$(sed -n 's/^MARKER=//p' "$1" | head -1)" \
+                           '$0 == m { exit } { print }' "$1"; }
+          unpack() { local start
+              start=$(awk -v m="$(sed -n 's/^MARKER=//p' "$1" | head -1)" \
+                          '$0 == m { print NR + 1; exit }' "$1")
+              tail -n +"$start" "$1" | tar -xz -C "$2"; }
+
+          bash -n out/get.sh
+
+          prologue out/awg-panel.sh | bash -n
+          # The panel bundle must actually carry the built UI, or every install
+          # from it would stop and ask for Node.
+          tmp=$(mktemp -d)
+          unpack out/awg-panel.sh "$tmp"
+          test -f "$tmp/panel/frontend/dist/index.html"
+          test -x "$tmp/panel/install-panel.sh"
+          # And the updater, plus the release helper it runs. Every server that
+          # installs from this bundle gets its ability to install the *next*
+          # release from these two files; a bundle missing either is a release
+          # that quietly ends the update chain for everyone who takes it.
+          test -x "$tmp/bin/awg-update"
+          test -f "$tmp/panel/awg/release.py"
+
+          # And it must install with no index reachable. --no-index is the
+          # whole claim: if a wheel is missing for this interpreter the install
+          # on a server would quietly fall back to PyPI, and nobody would find
+          # out here. Proving it from the unpacked payload tests what was
+          # published rather than what is in the tree.
+          python3 -m venv "$tmp/venv"
+          for lock in requirements-bootstrap.lock requirements.lock; do
+            "$tmp/venv/bin/python" -m pip install --quiet --no-index \
+              --find-links "$tmp/panel/wheels" --require-hashes -r "$tmp/panel/$lock"
+          done
+          "$tmp/venv/bin/python" -c 'import django, segno; print("offline install ok:", django.get_version())'
+
+          # And the install command, end to end, against the very files this
+          # release is about to publish: resolve, download, check against the
+          # SHA256SUMS written above, hand the bundle to bash. --help is what
+          # makes that safe to do on a runner - it is a full run of get.sh that
+          # stops at the installer's usage text instead of building a kernel
+          # module. The mirror is a directory laid out the way the releases URL
+          # serves one, which is the same seam a censored network installs
+          # through.
+          mirror="$(mktemp -d)/releases"
+          mkdir -p "$mirror/latest/download"
+          cp out/awg-panel.sh out/SHA256SUMS "$mirror/latest/download/"
+          AWG_GET_ROOTLESS=1 \
+          AWG_PANEL_CACHE="$(mktemp -d)" \
+          AWG_PANEL_RELEASE_URL="file://$mirror" \
+            bash out/get.sh --help >/dev/null
+          echo "get.sh installs what this release publishes"
+
+          # The bundle must carry the upstream sources. install.sh refuses a
+          # vendor/ that disagrees with its pins, so assert here what it will
+          # check there rather than discovering on someone's VPS that the
+          # release was cut from a stale directory.
+          test -f "$tmp/vendor/amneziawg-linux-kernel-module/src/version.h"
+          test -f "$tmp/vendor/amneziawg-tools/src/Makefile"
+          test ! -e "$tmp/vendor/amneziawg-linux-kernel-module/.git"
+          for k in KMOD_SHA TOOLS_SHA; do
+            want=$(sed -n "s/^${k}=//p" install.sh | head -1)
+            got=$(sed -n "s/^${k}=//p" "$tmp/vendor/PINNED")
+            test -n "$want" && test "$want" = "$got"
+          done
+          echo "bundle carries the pinned sources"
+
+          # The source tarball makes the same promises, and an exclude pattern
+          # is exactly the kind of thing that silently stops keeping them.
+          tar -tzf "out/awg-panel-${TAG#v}.tar.gz" \
+            | grep -q "/panel/frontend/dist/index.html$"
+          tar -tzf "out/awg-panel-${TAG#v}.tar.gz" | grep -q "/panel/wheels/.*\.whl$"
+          tar -tzf "out/awg-panel-${TAG#v}.tar.gz" \
+            | grep -q "/vendor/amneziawg-linux-kernel-module/src/version.h$"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: out/*
+          generate_release_notes: true
+          # A hyphen in the tag is the semver pre-release marker: v0.1.0-rc1 is
+          # a candidate, v0.1.0 is not. Said here rather than left to the
+          # action's own inference, because the thing it decides is whether
+          # /releases/latest - the URL the install command uses - moves to
+          # point at this build.
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+          body: |
+            ## Install
+
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/get.sh | sudo bash
+            ```
+
+            That fetches `awg-panel.sh` from this release,
+            checks it against the `SHA256SUMS` below and runs it. To install
+            this exact version rather than the latest, or from a mirror:
+
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.tag || github.ref_name }}/get.sh \
+              | sudo env AWG_PANEL_VERSION=${{ github.event.inputs.tag || github.ref_name }} bash
+            ```
+
+            Or download and run the installer yourself, which is the same
+            thing without the fetching:
+
+            ```bash
+            curl -fsSLO https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.tag || github.ref_name }}/awg-panel.sh
+            sudo bash awg-panel.sh
+            ```
+
+            The bundle carries the kernel module and tools source at the commits this
+            release pins, the prebuilt UI, and every Python wheel, so it clones nothing
+            at install time. The only network it still needs is `apt`, for
+            `build-essential`, `dkms` and the headers for the running kernel.
+
+            Re-running on an existing installation is an upgrade: the
+            config, server key, clients and traffic history are kept, and the
+            rebuilt module is unloaded and swapped in rather than waiting for
+            a reboot.
+
+            ## Files
+
+            | File | What it is |
+            | --- | --- |
+            | `awg-panel.sh` | The installer, and the one to run. Everything described above is in it. |
+            | `get.sh` | What the install command pipes into a shell: it resolves `awg-panel.sh` out of this release, checks it against `SHA256SUMS`, and runs it. |
+            | `awg-panel-<version>.tar.gz` | The source at this tag with the built UI, the wheels and the pinned upstream sources already in it. Nothing installs from this - it is here to be read, and to build from with no network. |
+            | `SHA256SUMS` | Checksums for the three above: `sha256sum -c SHA256SUMS` once you have downloaded them. |
+
+            GitHub's own "Source code" links below are the git tree alone - no
+            built UI, no wheels, no `vendor/`, because none of those are
+            committed to it.

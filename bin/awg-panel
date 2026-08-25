@@ -1,0 +1,214 @@
+#!/bin/bash
+#
+# awg-panel - control the optional AWG Panel web interface
+#
+# Thin wrapper over systemctl and the panel's own virtualenv, so the TUI, the
+# installer and an admin at a prompt all drive the panel the same way. The
+# panel is only a second front end over /etc/amnezia/amneziawg: stopping or
+# removing it never touches the tunnel.
+#
+set -uo pipefail
+
+PREFIX="${AWG_PANEL_PREFIX:-/opt/awg-panel}"
+ENV_FILE="${AWG_PANEL_ENV:-/etc/awg-panel.env}"
+PY="$PREFIX/.venv/bin/python"
+UNITS=(awg-panel-web awg-panel-collector)
+
+usage() {
+    cat <<'USAGE'
+awg-panel - control the AWG Panel web interface
+
+  status              service state, URL, version, data locations
+  url                 print the login URL
+  start | stop | restart
+  enable | disable    start at boot, or not
+  restart-deferred    restart the web service in 2s (used after a settings
+                      change, so the HTTP response still gets delivered)
+  passwd [USER]       set the panel password (interactive; the account is
+                      found for you unless there is more than one)
+  reset-2fa [USER]    remove the user's TOTP device
+  migrate             apply pending database migrations
+  logs [-n N]         recent log for both services (default 80 lines)
+  version             installed panel version
+  env                 show the effective environment file
+  manage ...          run any manage.py command in the panel's virtualenv
+USAGE
+}
+
+case "${1:-}" in -h|--help|help|"") usage; exit 0 ;; esac
+
+# Spelled out here rather than taken from lib/i18n.sh, because this tool is
+# installed on machines that have no lib/ to take it from: panel/install-panel.sh
+# --standalone puts awg-panel in /usr/local/bin on its own, and a source would
+# turn every panel-only install into a CLI that cannot start. A config directory
+# it can read the language out of is likewise not a given there, and English is
+# the right answer when there is none. The locale handling that lib/i18n.sh does
+# is left with it - nothing here pads a column or lowercases an answer.
+LANG_FILE="${AWG_LANG_FILE:-${AWG_CONF_DIR:-/etc/amnezia/amneziawg}/language}"
+if [[ -z "${LANG_CHOICE:-}" ]]; then
+    LANG_CHOICE="en"
+    if [[ -r "$LANG_FILE" ]]; then
+        read -r _lang_stored < "$LANG_FILE" 2>/dev/null || _lang_stored=""
+        _lang_stored="${_lang_stored//[[:space:]]/}"
+        [[ "$_lang_stored" == "en" || "$_lang_stored" == "ru" ]] && LANG_CHOICE="$_lang_stored"
+        unset _lang_stored
+    fi
+fi
+t() {
+    if [[ "${LANG_CHOICE:-en}" == "ru" ]]; then printf '%s' "$2"
+    else                                        printf '%s' "$1"; fi
+}
+
+# The address this machine would send from to reach the public internet. A
+# second copy of lib/common.sh's route_src_addr, for the reason t() above is a
+# second copy: a standalone panel install has no lib/ to source. Keep the two
+# in step.
+#
+# The field is found by name rather than counted to. `ip route get` prints a
+# `via <gw>` pair only when the next hop is a gateway; on a point-to-point or
+# directly-attached route there is none, every later field shifts two to the
+# left, and the seventh word - the source address on a normal server - becomes
+# the number after `uid`. This used to read $7, so on a PPPoE or /32-routed VPS
+# `awg-panel url` printed http://1000:8088/. Searching for `src` cannot shift.
+route_src_addr() {
+    ip -4 route get 1.1.1.1 2>/dev/null \
+        | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }'
+    return 0
+}
+
+[[ ${EUID} -ne 0 ]] && exec sudo -- "$0" "$@"
+
+[[ -x "$PY" ]] || {
+    printf '%s\n' "$(t "the web panel is not installed at $PREFIX (try: sudo ./install.sh --panel)" \
+                       "веб-панель не установлена в $PREFIX (попробуйте: sudo ./install.sh --panel)")" >&2
+    exit 1; }
+
+# The env file is the single source of truth for listen address, port, base
+# path and TLS: systemd, manage.py and this script all read it.
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "$ENV_FILE"
+    set +a
+fi
+LISTEN="${AWG_PANEL_LISTEN:-0.0.0.0}"
+PORT="${AWG_PANEL_PORT:-8088}"
+BASE="${AWG_PANEL_BASE_PATH:-/}"
+TLS="${AWG_PANEL_TLS:-0}"
+
+manage() { (cd "$PREFIX" && "$PY" manage.py "$@"); }
+
+# The first non-wildcard name the certificate is issued for, or nothing.
+#
+# Addresses count as names here. Let's Encrypt issues certificates for IP
+# addresses, and one of those carries an IP SAN and no DNS entry at all - so
+# reading only DNS: lines answers "no name" about a certificate that has one,
+# and the URL printed below falls back to whatever clients.env last recorded.
+# That is usually the same address, and the one time it is not is the time
+# somebody is trying to work out why the browser refuses the panel.
+cert_name() {
+    [[ "$TLS" == "1" && -n "${AWG_PANEL_TLS_CERT:-}" ]] || return 0
+    command -v openssl >/dev/null 2>&1 || return 0
+    openssl x509 -in "$AWG_PANEL_TLS_CERT" -noout -ext subjectAltName 2>/dev/null \
+        | tr ',' '\n' \
+        | sed -n -e 's/.*DNS:\([^ ,]*\).*/\1/p' -e 's/.*IP Address:\([^ ,]*\).*/\1/p' \
+        | grep -v '^\*' | head -1
+}
+
+panel_url() {
+    local host="$LISTEN" scheme=http
+    [[ "$TLS" == "1" ]] && scheme=https
+    # 0.0.0.0 is not something you can paste into a browser; show the address
+    # the box actually answers on.
+    if [[ "$host" == "0.0.0.0" || "$host" == "::" || -z "$host" ]]; then
+        # With TLS on, an address the certificate does not cover is refused by
+        # the browser, and that refusal looks exactly like a panel that is down
+        # - which is what an admin running this command already suspects. The
+        # name on the certificate is the one that works, so it comes first.
+        host=$(cert_name)
+        [[ -n "$host" ]] || host=$(sed -n 's/^ENDPOINT_HOST="\([^"]*\)".*/\1/p' \
+               /etc/amnezia/amneziawg/clients.env 2>/dev/null)
+        [[ -n "$host" ]] || host=$(route_src_addr)
+        [[ -n "$host" ]] || host="<server-ip>"
+    fi
+    # An IPv6 literal needs its brackets back before the port is written after
+    # it, or the address and the port run together into something no browser
+    # will parse. A name and an IPv4 address never contain a colon.
+    [[ "$host" == *:* && "$host" != \[*\] ]] && host="[${host}]"
+    printf '%s://%s:%s%s\n' "$scheme" "$host" "$PORT" "$BASE"
+}
+
+case "$1" in
+status)
+    printf '%s%s\n'   '  URL           ' "$(panel_url)"
+    printf '%s%s\n'   "$(t '  Version       ' '  Версия        ')" "$(cat "$PREFIX/VERSION" 2>/dev/null || t "unknown" "неизвестно")"
+    printf '%s%s\n'   "$(t '  Install       ' '  Установка     ')" "$PREFIX"
+    printf '%s%s\n'   "$(t '  Data          ' '  Данные        ')" "${AWG_PANEL_DATA:-/var/lib/awg-panel}"
+    printf '%s%s\n'   "$(t '  Env file      ' '  Env-файл      ')" "$ENV_FILE"
+    printf '%s%s\n\n' "$(t '  Interface     ' '  Интерфейс     ')" "${AWG_IFACE:-awg0}"
+    for u in "${UNITS[@]}"; do
+        printf '  %-22s %-10s %s %s\n' "$u" \
+            "$(systemctl is-active "$u" 2>/dev/null)" \
+            "$(systemctl is-enabled "$u" 2>/dev/null)" \
+            "$(t 'at boot' 'при загрузке')"
+    done
+    printf '\n%s\n' "$(t '  Listening' '  Слушает')"
+    ss -tlnp 2>/dev/null | grep -E "State|:${PORT}\b" | sed 's/^/    /' \
+        || printf '%s\n' "$(t "    nothing on port ${PORT}" "    на порту ${PORT} ничего нет")"
+    ;;
+url)     panel_url ;;
+start)   systemctl start   "${UNITS[@]}" ;;
+stop)    systemctl stop    "${UNITS[@]}" ;;
+restart) systemctl restart "${UNITS[@]}" ;;
+enable)  systemctl enable  "${UNITS[@]}" ;;
+disable) systemctl disable "${UNITS[@]}" ;;
+restart-deferred)
+    # Called from inside a request handler: the restart must happen after the
+    # response has been written, or the browser sees a dropped connection
+    # instead of "settings saved".
+    #
+    # AccuracySec is the whole reason the two seconds mean two seconds. A timer
+    # unit defaults to an accuracy of one minute, and systemd is free to place
+    # the expiry anywhere in the window that opens at --on-active - at a
+    # position it picks per host and then keeps, so a server that fires this
+    # half a minute late does it every single time. The page is meanwhile
+    # counting down eight seconds and then handing the browser an address
+    # nothing is listening on yet.
+    #
+    # --collect so a restart that fails does not leave awg-panel-reload behind
+    # in a failed state: the unit name would then be taken, every later
+    # systemd-run would refuse it, and the panel would silently be running on
+    # the fallback below for good.
+    #
+    # The redirect covers the whole background job, not just systemd-run.
+    # This is called with its output captured, and a backgrounded job holds
+    # those pipes open: without it the fallback keeps the request that asked
+    # for the restart waiting on its own sleep, and then restarts the service
+    # out from under the response it was about to write.
+    { systemd-run --on-active=2 --timer-property=AccuracySec=100ms --collect \
+        --unit=awg-panel-reload systemctl restart awg-panel-web \
+        || { sleep 2; systemctl restart awg-panel-web; }; } >/dev/null 2>&1 &
+    ;;
+passwd)
+    # The account is not necessarily called "admin": it can be renamed from
+    # Settings, and somebody locked out of a renamed panel is exactly who runs
+    # this. So the name is asked for rather than assumed, and a panel with more
+    # than one account says so instead of guessing.
+    user="${2:-}"
+    [[ -n "$user" ]] || user="$(manage accountname)" || exit 1
+    manage changepassword "$user"
+    ;;
+# reset2fa resolves the single account itself when given nothing, so an
+# unquoted default here would only put the old assumption back.
+reset-2fa) manage reset2fa ${2:+"$2"} ;;
+migrate)  manage migrate ;;
+version)  cat "$PREFIX/VERSION" 2>/dev/null || printf '%s\n' "$(t "unknown" "неизвестно")" ;;
+env)      cat "$ENV_FILE" ;;
+logs)
+    n=80
+    [[ "${2:-}" == "-n" ]] && n="${3:-80}"
+    journalctl -u awg-panel-web -u awg-panel-collector -n "$n" --no-pager
+    ;;
+manage)   shift; manage "$@" ;;
+*) echo "unknown command '$1' (try: awg-panel help)" >&2; exit 1 ;;
+esac

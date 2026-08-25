@@ -1,0 +1,462 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Palette: one neutral grey ramp, no hue at all on any surface. Values are bare
+ * HSL triplets (no hsl() wrapper) so Tailwind can compose them with an alpha
+ * channel, e.g. bg-primary/10 -> hsl(var(--primary) / 0.1).
+ *
+ * Every structural colour - page, card, sidebar, button, border, focus ring -
+ * is written `0 0% N%`. The zero saturation is the point and not an accident:
+ * a tint of a few percent is invisible on one surface and reads as a cast the
+ * moment two of them sit side by side, which is how the panel ended up looking
+ * uniformly blue when only the accent was ever meant to be. Keeping the ramp at
+ * exactly zero means a surface can only ever differ from its neighbour in
+ * lightness, so depth is the one thing colour is used for.
+ *
+ * --primary is therefore near-black on the light theme and white on the dark
+ * one - the two ends of the same ramp - which puts a solid button at maximum
+ * contrast against its page in both, and leaves hue free to mean something.
+ *
+ * Hue survives in exactly two places, both of which carry information rather
+ * than style: the state colours (--destructive, --success, --warning, --info)
+ * and the chart series. Nothing else may introduce one.
+ *
+ * Contrast targets: body text >= 7:1, muted text and state colours >= 4.5:1
+ * against their own surface, interactive borders >= 3:1, in both themes.
+ */
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* Page sits below card on purpose: a white card has to lift off it without
+       a shadow doing all the work. */
+    --background: 0 0% 96%;
+    --foreground: 0 0% 9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    /* Not pure black. #000 on a white card is a hole rather than a control, and
+       the last few percent buy no contrast worth having: this is already 17:1
+       against its own label. */
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 91%;
+    --secondary-foreground: 0 0% 15%;
+
+    --muted: 0 0% 94%;
+    --muted-foreground: 0 0% 40%;
+
+    /* Hover and selection are a step down the same ramp, not a tint. */
+    --accent: 0 0% 91%;
+    --accent-foreground: 0 0% 9%;
+
+    --destructive: 4 74% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 145 65% 28%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 28 90% 36%;
+    --warning-foreground: 0 0% 100%;
+
+    /* Teal, not blue. It is the one state colour with no natural hue of its
+       own, so it was free to be whatever was left - and blue is the hue this
+       palette exists to get rid of. Teal keeps it clear of --success at the
+       green end and of --warning at the other. */
+    --info: 190 88% 27%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 0 0% 87%;
+    /* Input borders are an interactive boundary, so they clear 3:1 against the
+       page even though decorative borders do not have to. */
+    --input: 0 0% 55%;
+    --ring: 0 0% 9%;
+
+    /* The scrim behind a modal. It belongs to the page, not to the text on it:
+       a dim built out of --foreground inverts with the theme and washes a dark
+       panel white. So each theme names its own, a few steps away from
+       --background - far enough that the page reads as pushed back and the
+       card on top keeps its edge, close enough that the dim never fights the
+       theme it is dimming. */
+    --overlay: 0 0% 65%;
+
+    /* Chart series: distinguishable for the common colour-vision deficiencies
+       and still readable when a line sits on the card background.
+       --chart-1 is graphite rather than a hue, because it is the series that
+       carries the panel's own numbers - the gauges, the dashboard progress bar,
+       download against upload - and those read as part of the interface rather
+       than as data about something else. The hues start at --chart-2, where a
+       second series first has to be told apart from the first. */
+    --chart-1: 0 0% 20%;
+    --chart-2: 190 88% 30%;
+    --chart-3: 280 55% 45%;
+    --chart-4: 28 90% 40%;
+    --chart-5: 340 70% 45%;
+
+    --sidebar-background: 0 0% 94%;
+    --sidebar-foreground: 0 0% 25%;
+    --sidebar-primary: 0 0% 9%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 89%;
+    --sidebar-accent-foreground: 0 0% 9%;
+    --sidebar-border: 0 0% 86%;
+    --sidebar-ring: 0 0% 9%;
+
+    /* The rail's width, and the two places it is spent: the rail itself, and
+       the start padding that keeps the page clear of it. Not a colour, so not
+       a triplet, and not in .dark either - a theme has no opinion about how
+       wide a sidebar is.
+
+       These are the values a stylesheet that arrives before React has to
+       resolve; lib/sidebarWidth.ts owns them from mount onwards, writing the
+       remembered width onto <html> before the first paint. The width is there
+       rather than in a style prop so a drag can repaint at the pointer's rate
+       without re-rendering the page it is resizing, and the duration is beside
+       it so the same drag can turn the easing off - a rail that eases towards
+       the cursor lags it by exactly this long, which reads as a broken drag
+       rather than as motion. */
+    --sidebar-width: 16rem;
+    --sidebar-motion: 200ms;
+
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    color-scheme: dark;
+
+    /* True black, and the only surface in either theme that sits at an
+       endpoint. Everything the operator reads - card, popover, sidebar - is
+       lifted off it by lightness alone, so the page is the floor rather than
+       another shade of grey competing with the panels on top of it. */
+    --background: 0 0% 0%;
+    --foreground: 0 0% 98%;
+
+    --card: 0 0% 8%;
+    --card-foreground: 0 0% 98%;
+
+    /* A popover floats above a card that is already above the page, so it is
+       the third step up rather than the same one. */
+    --popover: 0 0% 11%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 0 0% 100%;
+    --primary-foreground: 0 0% 6%;
+
+    --secondary: 0 0% 16%;
+    --secondary-foreground: 0 0% 96%;
+
+    --muted: 0 0% 13%;
+    --muted-foreground: 0 0% 66%;
+
+    --accent: 0 0% 18%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 4 88% 68%;
+    --destructive-foreground: 0 0% 8%;
+
+    --success: 142 62% 55%;
+    --success-foreground: 0 0% 8%;
+
+    --warning: 36 94% 62%;
+    --warning-foreground: 0 0% 8%;
+
+    --info: 188 78% 58%;
+    --info-foreground: 0 0% 8%;
+
+    --border: 0 0% 18%;
+    --input: 0 0% 45%;
+    --ring: 0 0% 100%;
+
+    /* The page is already black, so the scrim cannot dim it any further and
+       does not need to: what it has to push back is the card sitting on it,
+       and black at 60% takes that from 8% down to 3%. */
+    --overlay: 0 0% 0%;
+
+    --chart-1: 0 0% 92%;
+    --chart-2: 188 78% 58%;
+    --chart-3: 280 70% 72%;
+    --chart-4: 36 94% 62%;
+    --chart-5: 340 80% 68%;
+
+    --sidebar-background: 0 0% 4%;
+    --sidebar-foreground: 0 0% 80%;
+    --sidebar-primary: 0 0% 100%;
+    --sidebar-primary-foreground: 0 0% 6%;
+    --sidebar-accent: 0 0% 15%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 0 0% 16%;
+    --sidebar-ring: 0 0% 100%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* The page crosses the height of the window all the time - a settings tab
+       swapped for a shorter one, a save bar appearing, a table filtered down -
+       and every crossing takes the scrollbar away or brings it back. The bar is
+       10px of layout, so the whole panel slides sideways and back in the space
+       of one click. Reserving its width from the start means nothing moves. */
+    scrollbar-gutter: stable;
+  }
+
+  /* Radix locks the body behind a select, menu or dialog, and react-remove-scroll
+     pads it by the width of the scrollbar it just hid so the page does not jump
+     into the space. With the gutter above already holding that space open there
+     is nothing to make up for, and the padding becomes the jump it was there to
+     prevent. Two element names to outweigh the library's own !important. */
+  html body[data-scroll-locked] {
+    margin-right: 0 !important;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family:
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      Roboto,
+      "Helvetica Neue",
+      Arial,
+      "Noto Sans",
+      sans-serif;
+    /* Byte counters and rates sit in tables that must not reflow every poll. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  #root {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  ::selection {
+    background-color: hsl(var(--primary) / 0.25);
+  }
+
+  /* Flipping the theme repaints every surface on the page at once, and with no
+     transition that lands as a flashbulb. There are two ways out of that here,
+     and which one runs depends on whether anyone asked for it.
+
+     A change the operator made gets the sweep further down: a circle of the new
+     theme opening from the control they just used, so the repaint reads as one
+     movement with a cause and a direction rather than as the page blinking. A
+     change nobody clicked - the OS crossing into dark on a schedule, the same
+     panel switched in another tab - has no origin to open from and no business
+     pulling the eye, so it cross-fades instead.
+
+     ThemeProvider picks one, hangs the matching class on <html> for the length
+     of it and takes it off again, so the cost is paid on the one interaction
+     that needs it rather than on every hover.
+
+     Both are slower than they were. At the 220ms this fade used to run, the
+     panel had finished changing before the eye had found what moved, which
+     lands as a flinch rather than as a transition - the thing an animation is
+     supposed to prevent. */
+  @media (prefers-reduced-motion: no-preference) {
+    .theme-transition,
+    .theme-transition *,
+    .theme-transition *::before,
+    .theme-transition *::after {
+      transition:
+        background-color 420ms cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 420ms cubic-bezier(0.4, 0, 0.2, 1),
+        color 420ms cubic-bezier(0.4, 0, 0.2, 1),
+        fill 420ms cubic-bezier(0.4, 0, 0.2, 1),
+        stroke 420ms cubic-bezier(0.4, 0, 0.2, 1),
+        box-shadow 420ms cubic-bezier(0.4, 0, 0.2, 1),
+        outline-color 420ms cubic-bezier(0.4, 0, 0.2, 1),
+        text-decoration-color 420ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+      transition-delay: 0s !important;
+    }
+
+    /* The sweep. The browser has both themes on screen as snapshots for the
+       length of the transition: ThemeProvider grows a clip circle on the new
+       one, and the old one sits under it untouched, so nothing dissolves - one
+       theme is drawn over the other.
+
+       Both default animations have to go. The cross-fade the browser would run
+       on its own shows the new palette through the part of the page the circle
+       has not reached yet, which is the flash again with extra steps; and
+       mix-blend-mode defaults to plus-lighter, which exists to keep that
+       cross-fade from dimming and blows the overlap out to white here instead.
+
+       The class scopes all of it to this one transition, so a view transition
+       added anywhere else in the panel still gets the browser's own. */
+    html.theme-sweep::view-transition-old(root),
+    html.theme-sweep::view-transition-new(root) {
+      animation: none;
+      mix-blend-mode: normal;
+    }
+
+    html.theme-sweep::view-transition-old(root) {
+      z-index: 0;
+    }
+
+    html.theme-sweep::view-transition-new(root) {
+      z-index: 1;
+    }
+
+    /* And nothing underneath the circle may animate on its own.
+     *
+     * The new half of a view transition is live content, not a still, so
+     * anything the page animates while the circle is open is animating inside
+     * it. A table row carries transition-colors for its hover, which is 150ms
+     * of border and background fade that the theme change also triggers - 250
+     * of them at once on the clients table, all starting from the old palette.
+     * The card behind them flips instantly, having no transition of its own, so
+     * the circle opens onto a table with dark surfaces and light grey rules
+     * that catch up a moment later. It reads as the page breaking and then
+     * fixing itself, and it robs the sweep of the one thing it is for: the
+     * circle stops being a boundary between two finished themes and becomes a
+     * window onto a half-finished one.
+     *
+     * So on this path every element's own transitions are off. The theme lands
+     * in a single frame, everywhere, and the only thing moving on screen is the
+     * circle. Element animations are left alone - a menu closing behind the
+     * sweep, a spinner still turning - because those are not the theme changing
+     * and cutting them would strand them mid-flight. */
+    html.theme-sweep *,
+    html.theme-sweep *::before,
+    html.theme-sweep *::after {
+      transition: none !important;
+    }
+  }
+
+  /* Radix components ship their own focus ring; this covers plain links and
+     anything hand-rolled. */
+  a:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: calc(var(--radius) - 4px);
+  }
+
+  /* The time field draws its own picker button, and the panel does not draw it.
+     There is no date field left to worry about - components/DatePicker.tsx
+     replaced both of those with a calendar of the panel's own - and the clock
+     under that calendar is the one native control still standing.
+
+     It used to be inverted here, on the reasoning that the browser draws the
+     glyph black and will not theme it. That stopped being true when `.dark` was
+     given `color-scheme: dark`: the browser then draws it white, the invert
+     turned it black again, and the affordance vanished into the field it sits
+     in - the very thing the rule was written to prevent. The colour scheme is
+     the whole fix, so all this leaves behind is the pointer and the hover. */
+  input[type="time"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.55;
+    transition: opacity 150ms ease-out;
+  }
+
+  input[type="time"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+  }
+
+  /* Thin scrollbars: the sidebar, log panes and wide tables all scroll, and the
+     default chrome bars are heavy enough to look like layout. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.35);
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.55);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+
+    /* The one thing that has to survive the rule above. Everything else it
+       cuts is decoration, which is exactly what the setting asks for; a
+       loading ring is the panel saying "still working", and cutting it to a
+       single 0.01ms turn leaves a frozen arc on screen that is indis-
+       tinguishable from a hung page. Reduced motion means less movement, not
+       a progress indicator that lies, so the ring keeps turning at a calmer
+       pace.
+
+       Both !important and a class selector are load-bearing: the rule above
+       is !important, so a plain utility loses to it no matter where it sits
+       in the file. */
+    .animate-spinner {
+      animation-duration: 1.6s !important;
+      animation-iteration-count: infinite !important;
+    }
+
+    /* The second thing, for a related reason: the theme change is not decoration
+       either. Cut to 0.01ms it becomes the whole panel inverting between two
+       frames - the flashbulb the fade exists to prevent, and the harshest single
+       repaint the panel is capable of. That is the opposite of what someone
+       asking for less motion wants out of it.
+
+       What the setting protects against is movement: things sliding, zooming or
+       travelling across the screen. A colour crossing to another colour in place
+       moves nothing, so it stays - a little quicker than the 420ms above, and
+       colour only. The sweep is the part that genuinely moves, and ThemeProvider
+       does not start it at all under this setting, so what is left here is a
+       plain fade from one palette to the other.
+
+       Written out in full rather than leaning on the rule above, which is inside
+       a no-preference query and therefore contributes nothing here: this has to
+       name the properties as well as the duration. Both !important and the class
+       are load-bearing, exactly as for the spinner. */
+    .theme-transition,
+    .theme-transition *,
+    .theme-transition *::before,
+    .theme-transition *::after {
+      transition-property: background-color, border-color, color, fill, stroke !important;
+      transition-duration: 320ms !important;
+      transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1) !important;
+      transition-delay: 0s !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Horizontal scrollers (chart legends, tab strips) where a visible bar would
+     read as a broken layout. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}

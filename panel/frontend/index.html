@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="same-origin" />
+    <title>AWG Panel</title>
+    <script>
+      (function () {
+        // Django's index template injects the real window.__AWG__ around this
+        // file when it serves the built SPA. Only fill in a placeholder when
+        // nothing did, so the injected value always wins in production and
+        // `npm run dev` still has something to read.
+        window.__AWG__ = window.__AWG__ || {
+          basePath: "/",
+          version: "dev",
+        };
+
+        // Decide the theme before the first paint: React mounts a few hundred
+        // milliseconds later, which is long enough for a white flash on every
+        // reload of a dark-theme panel.
+        try {
+          var stored =
+            localStorage.getItem("awg-theme") ||
+            localStorage.getItem("theme") ||
+            localStorage.getItem("vite-ui-theme") ||
+            "system";
+          var dark =
+            stored === "dark" ||
+            (stored === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        } catch (err) {
+          // Storage blocked (private mode, hardened browser): light theme is a
+          // safe default and the app re-applies the choice once it mounts.
+        }
+      })();
+    </script>
+
+    <style>
+      /*
+       * The boot ring.
+       *
+       * The panel's bundle is a megabyte of JavaScript, and over the kind of
+       * link that makes someone want a VPN in the first place that is seconds
+       * of blank page: React cannot draw a spinner until it has parsed, so the
+       * longest wait in the whole panel was the one wait with nothing to look
+       * at. This is plain markup inside #root, so it paints with the first
+       * frame, and React clears the container in the same commit that mounts
+       * the app - no gap, no overlap.
+       *
+       * Deliberately the same ring as components/ui/spinner.tsx, so opening
+       * the panel is one continuous animation from first paint through
+       * "checking your session" rather than three separate waits stitched
+       * together.
+       *
+       * The two colours are --background and --primary from index.css, copied
+       * out as literals because this has to survive the stylesheet not having
+       * arrived - which is the whole reason it exists. They are the pair the
+       * session check draws with (a text-primary ring on bg-background), so
+       * the handover from this ring to that one changes nothing on screen but
+       * the label appearing under it. Being copies, they have to be moved when
+       * the palette moves: the panel spent a while opening on a blue-white
+       * page with an indigo ring, which is what it looked like before the
+       * palette lost its hue, and by then this was the only blue left in it.
+       */
+      .awg-boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: hsl(0 0% 96%);
+        color: hsl(0 0% 9%);
+        /* Under a quarter second the app is already there, and a spinner that
+           flashes for two frames looks more broken than no spinner at all. */
+        opacity: 0;
+        animation: awg-boot-in 200ms ease-out 250ms forwards;
+      }
+
+      html.dark .awg-boot {
+        background: hsl(0 0% 0%);
+        color: hsl(0 0% 100%);
+      }
+
+      .awg-boot-ring {
+        width: 2rem;
+        height: 2rem;
+        animation: awg-boot-spin 900ms linear infinite;
+      }
+
+      @keyframes awg-boot-in {
+        to {
+          opacity: 1;
+        }
+      }
+
+      @keyframes awg-boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* Same carve-out as index.css, and for the same reason: a frozen ring
+         reads as a hung panel. The 250ms delay above is kept, so a fast load
+         still shows nothing at all. */
+      @media (prefers-reduced-motion: reduce) {
+        .awg-boot-ring {
+          animation-duration: 1.6s !important;
+          animation-iteration-count: infinite !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="awg-boot" role="status" aria-label="Loading">
+        <svg
+          class="awg-boot-ring"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="9" opacity="0.25" />
+          <circle
+            cx="12"
+            cy="12"
+            r="9"
+            stroke-linecap="round"
+            stroke-dasharray="56.55"
+            stroke-dashoffset="42.41"
+          />
+        </svg>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

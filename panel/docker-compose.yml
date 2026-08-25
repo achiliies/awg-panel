@@ -1,0 +1,52 @@
+# Run the panel against an AmneziaWG server on the Docker host.
+#
+# The host must already have the kernel module loaded and the tunnel up;
+# `sudo ./install.sh` does that. These containers only manage it.
+#
+#   make -C panel build          # build the UI first
+#   docker compose -f panel/docker-compose.yml up -d
+#
+# host networking is required: the panel calls `awg` and `awg-quick`, which
+# talk to the kernel interface through a netlink socket in the host's network
+# namespace. A bridged container cannot see it.
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: awg-panel:latest
+  restart: unless-stopped
+  network_mode: host
+  cap_add:
+    - NET_ADMIN
+  environment:
+    AWG_IFACE: ${AWG_IFACE:-awg0}
+    AWG_CONF_DIR: /etc/amnezia/amneziawg
+    AWG_PANEL_DATA: /var/lib/awg-panel
+    AWG_PANEL_LISTEN: ${AWG_PANEL_LISTEN:-127.0.0.1}
+    AWG_PANEL_PORT: ${AWG_PANEL_PORT:-2097}
+    AWG_PANEL_BASE_PATH: ${AWG_PANEL_BASE_PATH:-/}
+  volumes:
+    # The shared source of truth. Read-write: the panel edits the same server
+    # and client configs the CLI does.
+    - /etc/amnezia:/etc/amnezia
+    - panel-data:/var/lib/awg-panel
+    # The host's tools, matched to the host's module. Read-only.
+    - /usr/bin/awg:/usr/bin/awg:ro
+    - /usr/bin/awg-quick:/usr/bin/awg-quick:ro
+
+services:
+  web:
+    <<: *common
+    container_name: awg-panel-web
+
+  collector:
+    <<: *common
+    container_name: awg-panel-collector
+    # No port of its own; it writes live state into the shared data volume.
+    healthcheck:
+      disable: true
+    command: ["python", "manage.py", "collector"]
+
+volumes:
+  panel-data:

@@ -1,0 +1,69 @@
+# Project metadata plus the tool configuration for ruff and pytest.
+#
+# There is no [build-system] on purpose: the panel is deployed by copying the
+# tree to /opt/awg-panel and installing a lock file into a virtualenv (see
+# install-panel.sh), never by `pip install .`, so a build backend would be one
+# more thing to keep working for no gain.
+#
+# The version ranges below are intent, not what installs. Every install path
+# uses requirements.lock / requirements-dev.lock, which pin exact versions and
+# sha256 hashes resolved from here by ./lock-deps.sh. Read the header of
+# requirements.txt for why.
+
+[project]
+name = "awg-panel"
+version = "1.0.0"                                     # keep in step with panel/VERSION
+description = "Web panel for the AmneziaWG server manager"
+# 3.10 is what Debian 12 and Ubuntu 22.04 ship; install-panel.sh refuses to go
+# older. The code targets 3.12 but uses nothing newer than 3.10 syntax.
+requires-python = ">=3.10"
+
+dependencies = [
+    "Django>=5.2,<6.0",
+    "djangorestframework>=3.15.2,<3.17",
+    "django-axes>=6.5,<9",
+    "django-otp>=1.5,<2",
+    "segno>=1.6,<2",
+    "argon2-cffi>=23.1,<26",
+    "cryptography>=42.0,<47",
+    "gunicorn>=22.0,<24",
+    "whitenoise>=6.6,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2,<10",
+    "pytest-django>=4.8,<5",
+    "ruff>=0.6,<1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["frontend", "staticfiles"]
+
+[tool.ruff.lint]
+# Correctness and import hygiene, not style opinions: this tree is edited by
+# whoever is fixing their VPN at 2am, and a linter that argues about
+# comprehensions is a linter people start passing --no-verify to.
+select = ["E", "F", "W", "I", "UP", "B"]
+# The formatter already holds code to 100 columns. E501 would only ever fire on
+# the parameter help texts in awg/validate.py, and breaking those mid-sentence
+# to satisfy a linter makes the thing users actually read worse.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Django writes these; reformatting them by hand loses the makemigrations diff.
+"apps/*/migrations/*.py" = ["E", "W"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apps", "awg", "awgui"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "awgui.settings"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--strict-markers"
+# No env block here: conftest.py monkeypatches AWG_CONF_DIR, AWG_PANEL_DATA and
+# AWG_MOCK per test so each one gets its own tmpdir, which a static list of
+# variables cannot do.

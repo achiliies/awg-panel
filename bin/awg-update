@@ -1,0 +1,861 @@
+#!/bin/bash
+#
+# awg-update - find the newest stable release and install it
+#
+# The one engine behind both front ends. awg-menu's Update entry and the
+# panel's Settings > Updates tab do not each know how to do this; they both run
+# this tool, so an update started from a browser and an update started over SSH
+# are the same operation with the same log and the same state file.
+#
+#   awg-update check [--json]   is there a newer stable release
+#   awg-update apply [--force]  install it, following the log on this terminal
+#   awg-update start            the same, but return as soon as it has begun
+#   awg-update status [--json]  where a running or finished update got to
+#   awg-update log [-n N]       the tail of the last one
+#
+# The work always happens in a transient systemd unit rather than as a child of
+# whoever asked for it. That is not tidiness: an update restarts the web service
+# and takes the tunnel down and up, so a run parented to the panel would be
+# killed halfway by its own install, and a run parented to an SSH session would
+# be killed halfway by a dropped connection. Neither leaves a server that can be
+# reasoned about afterwards. In its own unit it finishes either way, and the
+# state file says what happened whether or not anybody was watching.
+#
+# What is deliberately not here is a rollback of the code. An update rebuilds a
+# kernel module and re-registers it with DKMS, and there is no honest way to put
+# that back from a shell script that has just replaced itself. What is protected
+# instead is the data: a full backup is taken before anything is touched, it is
+# named in the state file and in the log, and docs/UPDATES.md says what to do
+# with it. Config, keys, clients and history are what cannot be rebuilt; the
+# code can be reinstalled from any release.
+#
+set -uo pipefail
+
+PREFIX="${AWG_PANEL_PREFIX:-/opt/awg-panel}"
+ENV_FILE="${AWG_PANEL_ENV:-/etc/awg-panel.env}"
+
+# This file, by an absolute path. The worker is launched by name from a
+# transient systemd unit, which has no working directory in common with whoever
+# started it - so `awg-update apply` typed as ./bin/awg-update would otherwise
+# hand systemd a relative path and get a unit that fails to start.
+SELF=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
+
+usage() {
+    cat <<'USAGE'
+awg-update - find the newest stable release and install it
+
+  check [--json]      compare the installed version against the newest release
+  apply [--force]     install it, printing the log as it happens
+  start [--force]     start the same update and return immediately
+  status [--json]     phase and result of the current or last update
+  log [-n N]          the tail of the last update's log (default 200 lines)
+  cancel [--force]    clear a finished update's state
+
+  --force             install the newest release even if it is not newer
+  --skip-backup       go ahead when the pre-update backup cannot be taken
+
+The repository checked is AWG_PANEL_UPDATE_REPO in /etc/awg-panel.env; a whole
+feed URL in AWG_PANEL_UPDATE_URL overrides it. Only stable releases are ever
+offered - a tag with a pre-release suffix is never installed.
+USAGE
+}
+
+case "${1:-}" in -h|--help|help|"") usage; exit 0 ;; esac
+
+# Root, because installing a release means writing /opt, /usr/local and
+# /etc/systemd/system. AWG_UPDATE_ROOTLESS skips the re-exec, which is how
+# tests/update.sh drives this against a tree in /tmp; it is a convenience being
+# turned off rather than a gate being opened, since everything below that needs
+# privileges is refused by the kernel without them either way.
+if [[ ${EUID} -ne 0 && -z "${AWG_UPDATE_ROOTLESS:-}" ]]; then
+    exec sudo -- "$0" "$@"
+fi
+
+# The panel's env file is the single source of truth for where releases come
+# from, as it is for the port and the base path. Read before anything else so
+# every path below sees the operator's settings and not this file's defaults.
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "$ENV_FILE"
+    set +a
+fi
+
+DATA="${AWG_PANEL_DATA:-/var/lib/awg-panel}"
+STATE_DIR="${AWG_UPDATE_DIR:-$DATA/update}"
+STATE="$STATE_DIR/state.json"
+LOG="$STATE_DIR/log"
+LOCK="$STATE_DIR/lock"
+WORK="$STATE_DIR/work"
+BACKUP_DIR="$DATA/backups"
+UNIT=awg-panel-update
+IFACE="${AWG_IFACE:-awg0}"
+
+# How many pre-update backups to keep. Each is the whole config tree and the
+# database, so on a busy server they are not small, and an update that filled
+# /var would be a poor way to protect anybody's data. Three is enough to reach
+# back past a bad release without turning this directory into an archive.
+KEEP_BACKUPS=3
+
+# Where the rules about versions live. One implementation, shared with the
+# panel, for the reason its own docstring gives: two would eventually disagree
+# about what "newer" means. Run with the system interpreter rather than the
+# panel's virtualenv because it imports nothing outside the standard library,
+# and because the virtualenv is one of the things an update replaces.
+RELEASE_PY="$PREFIX/awg/release.py"
+PY3=$(command -v python3 2>/dev/null || true)
+
+# A release description already on this machine, read instead of asking GitHub.
+# For a server with no route to github.com at all: mirror a release, drop its
+# JSON somewhere with file:// asset URLs in it, and everything below works
+# unchanged. Empty on every ordinary install.
+FEED="${AWG_UPDATE_FEED:-}"
+
+ASSET_BUNDLE=awg-panel.sh
+ASSET_SUMS=SHA256SUMS
+
+# Colours only on a terminal, so a log file and the panel's view of it stay
+# clean. Same palette as lib/common.sh; not sourced from there because this
+# tool has to keep working while an update is replacing that directory.
+if [[ -t 1 ]]; then
+    B=$'\e[1m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
+else
+    B='' R='' G='' Y='' N=''
+fi
+
+die() { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+
+# Spelled out here rather than taken from lib/i18n.sh, for the same reason the
+# palette above it is: this tool deliberately sources nothing because it has to
+# keep working while an update is replacing /usr/local/share/awg-script. The
+# locale handling that lib/i18n.sh does is left with it - nothing below pads a
+# column or lowercases an answer, so there is nothing here for a C locale to get
+# wrong.
+LANG_FILE="${AWG_LANG_FILE:-${AWG_CONF_DIR:-/etc/amnezia/amneziawg}/language}"
+if [[ -z "${LANG_CHOICE:-}" && -r "$LANG_FILE" ]]; then
+    read -r LANG_CHOICE < "$LANG_FILE" 2>/dev/null || true
+    LANG_CHOICE="${LANG_CHOICE//[[:space:]]/}"
+fi
+[[ "${LANG_CHOICE:-}" == en || "${LANG_CHOICE:-}" == ru ]] || LANG_CHOICE=en
+
+t() {
+    if [[ "$LANG_CHOICE" == ru ]]; then printf '%s' "$2"
+    else                                printf '%s' "$1"; fi
+}
+
+[[ -n "$PY3" ]] || die "$(t "python3 is not installed, and the update check needs it to read
+       GitHub's answer. Install it:  apt-get install -y python3" \
+                             "не установлен python3, а проверка обновлений использует его для чтения
+       ответа GitHub. Установите:  apt-get install -y python3")"
+
+install -d -m 700 "$STATE_DIR" 2>/dev/null || die "$(t "cannot create $STATE_DIR" "не удалось создать $STATE_DIR")"
+
+# --------------------------------------------------------------- state
+#
+# One small JSON object, replaced atomically on every transition, holding
+# everything either front end needs: which phase, which versions, where the
+# backup went and what the verdict was. Atomically because the panel polls it
+# every couple of seconds during an update and a reader must never catch it
+# half-written - which, on the one screen an operator watches while their server
+# reinstalls itself, would read as the update having gone wrong.
+state_set() {
+    "$PY3" - "$STATE" "$@" <<'PY'
+import json, os, sys, tempfile
+
+path = sys.argv[1]
+try:
+    with open(path) as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        data = {}
+except (OSError, ValueError):
+    data = {}
+for pair in sys.argv[2:]:
+    key, _, value = pair.partition("=")
+    data[key] = value
+directory = os.path.dirname(path) or "."
+fd, tmp = tempfile.mkstemp(dir=directory)
+try:
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise
+PY
+}
+
+state_get() {
+    [[ -f "$STATE" ]] || { printf '\n'; return 0; }
+    "$PY3" - "$STATE" "$1" <<'PY'
+import json, sys
+
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+    print(data.get(sys.argv[2], "") or "")
+except (OSError, ValueError, AttributeError):
+    print("")
+PY
+}
+
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# This boot, and the exact process. Both go into the state file beside the pid,
+# because a pid on its own says almost nothing: it is a number the kernel hands
+# out again. A worker that was OOM-killed or lost to a hard reset never reaches
+# its exit trap, so the state file is left saying "running" with a pid in it -
+# and after the reboot that follows, that number belongs to something else
+# entirely. Everything downstream then believed an update was in progress
+# forever: the panel's progress bar never stopped, `start` refused, and `cancel`
+# - the documented way out - refused too, because it asks the same question.
+#
+# The boot id settles it for the reboot case outright: a state file written
+# under a different boot cannot be describing a process that is still running.
+# The start time settles it within one boot, since the kernel will not reissue
+# a pid with the same start time.
+boot_id() {
+    [[ -r /proc/sys/kernel/random/boot_id ]] || { printf ''; return 0; }
+    tr -d '[:space:]' < /proc/sys/kernel/random/boot_id 2>/dev/null || printf ''
+}
+
+# Field 22 of /proc/<pid>/stat, the process's start time in clock ticks since
+# boot. Read by stripping everything up to the ") " that closes the command
+# name, because that name is the one field that can itself contain spaces and
+# brackets and would otherwise shift every column after it.
+proc_started() {  # pid
+    local raw
+    [[ -r "/proc/$1/stat" ]] || { printf ''; return 0; }
+    raw=$(< "/proc/$1/stat") || { printf ''; return 0; }
+    raw=${raw##*') '}
+    awk '{print $20}' <<<"$raw" 2>/dev/null || printf ''
+}
+
+# The installed version, which is the release's version: the release workflow
+# stamps panel/VERSION from the tag, so the panel's file is what the whole
+# installation is at. Read off the file rather than through `awg-panel version`
+# so a panel whose virtualenv is broken - which is a reason to be updating - can
+# still be told what it is running.
+installed_version() {
+    local v=""
+    [[ -f "$PREFIX/VERSION" ]] && v=$(tr -d '[:space:]' < "$PREFIX/VERSION")
+    printf '%s\n' "${v:-0.0.0}"
+}
+
+# ---------------------------------------------------------------- check
+#
+# Shells out to the shared helper and turns its JSON into shell variables, so
+# the rules about what counts as newer are applied in exactly one place. Every
+# field arrives prefixed R_; booleans arrive as 1 and 0 and nulls as empty
+# strings, which is what the tests below expect of them.
+# The shared helper's answer, as the JSON it prints.
+release_json() {
+    if [[ -n "$FEED" ]]; then
+        "$PY3" "$RELEASE_PY" --feed "$FEED" "$(installed_version)"
+    else
+        "$PY3" "$RELEASE_PY" "$(installed_version)"
+    fi
+}
+
+release_check() {
+    local current; current=$(installed_version)
+    [[ -f "$RELEASE_PY" ]] || {
+        printf 'R_checked=0\nR_reason=%q\nR_current=%q\n' \
+            "The release helper is missing at ${RELEASE_PY}, so this server cannot check for updates. Reinstall the panel." \
+            "$current"
+        return 0; }
+    release_json 2>/dev/null | "$PY3" -c '
+import json, shlex, sys
+
+try:
+    data = json.loads(sys.stdin.read())
+except ValueError:
+    data = {}
+if not data:
+    print("R_checked=0")
+    print("R_reason=" + shlex.quote(
+        "The release helper produced no answer. See: awg-update check"))
+    sys.exit(0)
+for key, value in data.items():
+    if value is True:
+        value = "1"
+    elif value is False:
+        value = "0"
+    elif value is None:
+        value = ""
+    print("R_%s=%s" % (key, shlex.quote(str(value))))
+'
+}
+
+cmd_check() {
+    case "${1:-}" in
+        --json)
+            [[ -f "$RELEASE_PY" ]] || {
+                printf '{"checked": false, "reason": "The release helper is missing at %s."}\n' \
+                    "$RELEASE_PY"; return 0; }
+            release_json
+            return 0 ;;
+        # The same answer as shell assignments, for awg-menu, which has to
+        # decide what to offer rather than print any of this. Undocumented in
+        # the usage above on purpose: it is one tool's way of talking to
+        # another, not something to type.
+        --sh)
+            release_check
+            return 0 ;;
+    esac
+
+    local R_checked=0 R_reason="" R_current="" R_latest="" R_update_available=0
+    local R_url="" R_notes="" R_published_at="" R_asset="" R_sums=""
+    eval "$(release_check)"
+
+    printf '%s%s\n' "$(t "  Installed     " "  Установлено   ")" "${R_current:-$(t "unknown" "неизвестно")}"
+    if [[ "$R_checked" != "1" ]]; then
+        printf '%s%s%s%s\n\n' "$(t "  Latest        " "  Последний     ")" "$Y" "$(t "(could not check)" "(не удалось проверить)")" "$N"
+        printf '  %s\n' "$R_reason"
+        return 1
+    fi
+    printf '%s%s\n' "$(t "  Latest        " "  Последний     ")" "${R_latest:-$(t "unknown" "неизвестно")}"
+    printf '%s%s\n\n' "$(t "  Release       " "  Выпуск        ")" "${R_url:-$(t "unknown" "неизвестно")}"
+    if [[ "$R_update_available" == "1" ]]; then
+        printf '  %s%s%s\n' "$G" "$(t "An update is available: ${R_current} -> ${R_latest}" "Доступно обновление: ${R_current} -> ${R_latest}")" "$N"
+        printf '%s\n' "$(t "  Install it with:  awg-update apply" "  Установите командой:  awg-update apply")"
+        [[ -n "$R_notes" ]] && {
+            printf '\n%s\n' "$(t "  Release notes" "  Описание выпуска")"
+            printf '%s\n' "$R_notes" | sed 's/^/    /'
+        }
+        return 0
+    fi
+    [[ -n "$R_reason" ]] && printf '  %s\n' "$R_reason"
+    printf '  %s%s%s\n' "$G" "$(t "This server is up to date." "На этом сервере установлена свежая версия.")" "$N"
+    return 0
+}
+
+# --------------------------------------------------------------- status
+
+# Is the worker still going, or did it stop without saying so? The second is
+# what this exists for. A transient unit that is OOM-killed or hits a bug never
+# reaches its own exit trap, and without this the state file would say "running"
+# forever and the panel's progress bar would spin for the rest of the server's
+# life.
+worker_alive() {
+    # Written by a previous boot, so whatever it says about a process is about
+    # a process that no longer exists. Checked before anything else, and before
+    # the pid is even read: this is the case that used to wedge the tool.
+    # Absent on a state file written by a version of this that did not record
+    # it, and then the older answer below is all there is.
+    local boot; boot=$(state_get boot)
+    [[ -z "$boot" || "$boot" == "$(boot_id)" ]] || return 1
+
+    local pid; pid=$(state_get pid)
+    if [[ -z "$pid" ]]; then
+        # Started, but the worker has not run far enough to record itself yet.
+        # That window is a fraction of a second in practice and it must not read
+        # as a dead update, or the first poll after pressing the button in the
+        # panel would answer "the update stopped before it finished". Bounded by
+        # the clock rather than trusted, so a systemd-run that silently launched
+        # nothing is still noticed - a minute after "starting" with no pid, there
+        # is no worker coming.
+        [[ "$(state_get phase)" == "starting" ]] || return 1
+        local began; began=$(state_get started)
+        [[ -n "$began" ]] || return 1
+        local age
+        age=$(( $(date -u +%s) - $(date -u -d "$began" +%s 2>/dev/null || echo 0) ))
+        (( age >= 0 && age < 60 ))
+        return $?
+    fi
+    systemctl is-active --quiet "${UNIT}.service" 2>/dev/null && return 0
+    kill -0 "$pid" 2>/dev/null || return 1
+    # The pid is somebody's. Whether it is still the worker's is the question a
+    # recycled pid gets wrong, and the start time is what answers it.
+    local want; want=$(state_get pid_start)
+    [[ -n "$want" ]] || return 0
+    [[ "$want" == "$(proc_started "$pid")" ]]
+}
+
+# Is an update actually holding the lock right now? The one answer that does not
+# come from the state file, for the places that have to be right when the state
+# file is wrong: flock is released by the kernel when the process holding it
+# dies, however it died, so a free lock means nothing is running whatever
+# state.json claims.
+update_locked() {
+    exec 8>"$LOCK" 2>/dev/null || return 1
+    if flock -n 8 2>/dev/null; then
+        flock -u 8 2>/dev/null
+        exec 8>&-
+        return 1
+    fi
+    exec 8>&-
+    return 0
+}
+
+# The status as the front ends should see it, with a stopped worker resolved to
+# a failure first so nothing downstream has to know about the distinction.
+settled_status() {
+    local status; status=$(state_get status)
+    if [[ "$status" == "running" ]] && ! worker_alive; then
+        state_set status=failed finished="$(now)" \
+            detail="$(t "The update stopped before it finished. The log below is where it got to." \
+                        "Обновление остановилось, не завершившись. Ниже показан журнал до момента остановки.")"
+        printf 'failed\n'
+        return 0
+    fi
+    printf '%s\n' "${status:-idle}"
+}
+
+cmd_status() {
+    local status; status=$(settled_status)
+    if [[ "${1:-}" == "--json" ]]; then
+        state_set status="$status"
+        if [[ -f "$STATE" ]]; then cat "$STATE"; printf '\n'; else printf '{"status": "idle"}\n'; fi
+        return 0
+    fi
+    case "$status" in
+        idle) printf '%s\n' "$(t "  No update has been run on this server." \
+                                 "  На этом сервере обновление ещё не запускалось.")"; return 0 ;;
+    esac
+    printf '%s%s\n' "$(t "  Status        " "  Статус        ")" "$status"
+    printf '%s%s\n' "$(t "  Phase         " "  Фаза          ")" "$(state_get phase)"
+    printf '%s%s -> %s\n' "$(t "  Version       " "  Версия        ")" "$(state_get from_version)" "$(state_get to_version)"
+    printf '%s%s\n' "$(t "  Started       " "  Запуск        ")" "$(state_get started)"
+    local finished backup
+    finished=$(state_get finished); [[ -n "$finished" ]] && printf '%s%s\n' "$(t "  Finished      " "  Завершено     ")" "$finished"
+    backup=$(state_get backup);     [[ -n "$backup"   ]] && printf '%s%s\n' "$(t "  Backup        " "  Копия         ")" "$backup"
+    printf '%s%s\n\n' "$(t "  Log           " "  Журнал        ")" "$LOG"
+    printf '  %s\n' "$(state_get detail)"
+}
+
+cmd_log() {
+    local n=200
+    [[ "${1:-}" == "-n" ]] && n="${2:-200}"
+    [[ -f "$LOG" ]] || { printf '%s\n' "$(t "no update has been run on this server" \
+                                            "на этом сервере обновление ещё не запускалось")"; return 0; }
+    tail -n "$n" "$LOG"
+}
+
+# Clear a finished update's state. Asked the lock as well as the state file,
+# and in that order of authority: this is what an operator reaches for when the
+# state file is wrong, so a version of it that refused whenever the state file
+# said "running" was refusing in exactly the case it exists for. A free lock
+# means no worker holds it, whatever the file says.
+cmd_cancel() {
+    local force=0
+    [[ "${1:-}" == "--force" ]] && force=1
+    if (( ! force )) && [[ "$(settled_status)" == "running" ]] && update_locked; then
+        die "$(t "an update is running; let it finish (awg-update status), or clear it anyway with: awg-update cancel --force" \
+                 "обновление уже выполняется; дождитесь завершения (awg-update status) либо сбросьте состояние принудительно: awg-update cancel --force")"
+    fi
+    state_set status=idle phase="" detail="" from_version="" to_version="" started="" finished="" \
+        backup="" pid="" pid_start="" boot="" unit=""
+    printf '%s\n' "$(t "cleared" "очищено")"
+}
+
+# ---------------------------------------------------------------- work
+#
+# Everything below runs inside the transient unit, with stdout and stderr
+# already redirected into the log.
+
+say()  { printf '%s\n' "$*"; }
+phase() {
+    state_set phase="$1" detail="$2"
+    printf '\n==> [%s] %s\n' "$(date -u +%H:%M:%S)" "$2"
+}
+fail() {
+    state_set status=failed finished="$(now)" detail="$1"
+    printf '\nFAILED: %s\n' "$1"
+    exit 1
+}
+
+fetch() {  # url dest
+    # A release mirrored onto this machine's own disk, which is what
+    # AWG_UPDATE_FEED exists for and how tests/update.sh drives the whole of
+    # this without a network. Handled here rather than left to curl, because
+    # wget --https-only refuses it and the two halves of this function have to
+    # accept the same URLs.
+    case "$1" in
+        file://*) cp -- "${1#file://}" "$2"; return $? ;;
+        https://*) ;;
+        # The scheme, checked here rather than left to either downloader,
+        # because only one of them checks it. curl refuses plain http on its
+        # own - --proto '=https', which covers redirects too - but wget does
+        # not: --https-only governs which links it follows when recursing and
+        # says nothing at all about the URL it was handed, so a wget-only box
+        # fetched the bundle over http quite happily. That is the one
+        # configuration where the checksum below buys nothing: SHA256SUMS
+        # arrives over the same cleartext connection as the thing it vouches
+        # for, so anything on the path rewrites both and the comparison still
+        # passes. get.sh has refused this since it was written; this is the
+        # other end of the same road, and it is the unattended end.
+        *)  say "$(t "  refusing to download over ${1%%:*}: an installer and the checksums that vouch for it would both arrive over a connection anything on the path can rewrite" \
+                     "  загрузка по ${1%%:*} отклонена: и установщик, и контрольные суммы к нему пришли бы по соединению, которое можно подменить на пути")"
+            return 1 ;;
+    esac
+    if command -v curl >/dev/null 2>&1; then
+        # No --max-time. It is a wall clock over the whole transfer, not a
+        # stall detector: at 900 seconds for a fifty megabyte bundle it refused
+        # every link slower than about 57 KB/s, and it refused them while they
+        # were still making progress. The people this software is for are
+        # disproportionately on exactly those links, and this is the unattended
+        # path - nobody is watching to try it again.
+        #
+        # --speed-limit with --speed-time asks the question actually worth
+        # asking: has this transfer stopped moving? A minute below a kilobyte a
+        # second is a dead connection; anything above it is a slow one, and a
+        # slow one is allowed to finish.
+        curl -fL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 \
+             --connect-timeout 20 --speed-limit 1024 --speed-time 60 -o "$2" "$1"
+    elif command -v wget >/dev/null 2>&1; then
+        # --timeout is already a stall detector rather than a wall clock: it is
+        # the idle time allowed on a read, so wget needs no equivalent of the
+        # two flags above.
+        wget --https-only --tries=3 --timeout=30 -O "$2" "$1"
+    else
+        say "$(t "neither curl nor wget is installed" "не установлены ни curl, ни wget")"
+        return 127
+    fi
+}
+
+# Keep the last few pre-update archives and delete the rest. Sorted by name,
+# which sorts by time: archive_name() in apps.panel.backup formats them
+# %Y%m%d-%H%M%S, so lexical order is chronological order.
+prune_backups() {
+    local old
+    while IFS= read -r old; do
+        [[ -n "$old" ]] || continue
+        rm -f "$old"
+        say "$(t "  removed an older pre-update backup: $(basename "$old")" \
+                 "  удалена более старая резервная копия перед обновлением: $(basename "$old")")"
+    done < <(find "$BACKUP_DIR" -maxdepth 1 -name 'awg-backup-*.tar.gz' -type f 2>/dev/null \
+             | sort | head -n -"$KEEP_BACKUPS")
+}
+
+do_update() {
+    local force="$1" skip_backup="$2"
+
+    state_set status=running started="$(now)" finished="" backup="" \
+        pid="$$" pid_start="$(proc_started $$)" boot="$(boot_id)" \
+        unit="$UNIT" phase=resolve detail="$(t "Asking which release is newest." "Запрос информации о самом свежем выпуске.")"
+    say "awg-update $(now)"
+    say "$(t "  state  $STATE" "  состояние  $STATE")"
+    say "$(t "  log    $LOG" "  журнал     $LOG")"
+
+    # ------------------------------------------------------ 1. resolve
+    phase resolve "$(t "Asking GitHub which release is newest" "Запрос к GitHub о самом свежем выпуске")"
+    # shellcheck disable=SC2034  # R_published_at is part of the answer's shape
+    local R_checked=0 R_reason="" R_current="" R_latest="" R_update_available=0 \
+          R_url="" R_notes="" R_published_at="" R_asset="" R_sums=""
+    eval "$(release_check)"
+    state_set from_version="${R_current:-unknown}"
+    [[ "$R_checked" == "1" ]] || fail "${R_reason:-$(t "The release list could not be reached." "Не удалось получить список выпусков.")}"
+    say "$(t "  installed  ${R_current}" "  установлено  ${R_current}")"
+    say "$(t "  latest     ${R_latest}" "  последний    ${R_latest}")"
+    state_set to_version="${R_latest:-unknown}"
+
+    if [[ "$R_update_available" != "1" ]]; then
+        if (( force )); then
+            say "$(t "  --force: reinstalling ${R_latest} over ${R_current}" "  --force: переустановка ${R_latest} поверх ${R_current}")"
+        else
+            state_set status=succeeded finished="$(now)" phase=done \
+                detail="$(t "Already on ${R_current}, which is the newest stable release." "Уже установлена версия ${R_current}, это самый свежий стабильный выпуск.")"
+            say ""
+            say "$(t "Nothing to do: ${R_current} is the newest stable release." "Действий не требуется: ${R_current} — самый свежий стабильный выпуск.")"
+            return 0
+        fi
+    fi
+    [[ -n "$R_asset" ]] || fail "${R_reason:-$(t "Release ${R_latest} carries no ${ASSET_BUNDLE}, so there is nothing to install." "В выпуске ${R_latest} отсутствует ${ASSET_BUNDLE}, устанавливать нечего.")}"
+    [[ -n "$R_sums" ]] || fail "$(t "Release ${R_latest} publishes no ${ASSET_SUMS}, so the download cannot be verified. Update from a checkout instead." "Для выпуска ${R_latest} не опубликован ${ASSET_SUMS}, проверить загрузку невозможно. Обновите вручную из репозитория.")"
+
+    # ------------------------------------------------------ 2. preflight
+    phase preflight "$(t "Checking the server has room to do this" "Проверка наличия свободного места на сервере")"
+    # Two filesystems, because they are not always the same one. The kernel
+    # module is built under /, which is where the 1.5 GB goes. The bundle, the
+    # payload it unpacks and the pre-update backup all land under $DATA. A
+    # server with /var on its own volume passes a check that only looks at /
+    # while having no room for any of the second group, and finds out in the
+    # middle of the backup - which is the one step whose whole job is to be
+    # finished before anything is touched.
+    local disk; disk=$(df --output=avail -m -- / 2>/dev/null | tail -1 | tr -d ' ')
+    [[ -n "$disk" ]] || disk=0
+    (( disk > 1500 )) || fail "$(t "Only ${disk} MB is free on /, and rebuilding the kernel module needs about 1.5 GB. Free some space and start the update again." "В разделе / свободно всего ${disk} МБ, а для пересборки модуля ядра требуется около 1.5 ГБ. Освободите место и запустите обновление снова.")"
+    say "$(t "  ${disk} MB free on /" "  свободно ${disk} МБ на /")"
+
+    local data_fs data_free
+    data_fs=$(df --output=target -- "$DATA" 2>/dev/null | tail -1)
+    if [[ -n "$data_fs" && "$data_fs" != "/" ]]; then
+        data_free=$(df --output=avail -m -- "$DATA" 2>/dev/null | tail -1 | tr -d ' ')
+        [[ -n "$data_free" ]] || data_free=0
+        # The bundle is about fifty megabytes and unpacks to a few hundred, and
+        # the backup beside it is the config tree and the database. Half a
+        # gigabyte is not a budget for those; it is the line below which the
+        # update is going to stop partway rather than at the start.
+        (( data_free > 500 )) || fail "$(t "Only ${data_free} MB is free on ${data_fs}, where ${DATA} is, and the download and the pre-update backup need about 500 MB between them. Free some space and start the update again." "На ${data_fs}, где расположен ${DATA}, свободно всего ${data_free} МБ, а загрузке и резервной копии вместе требуется около 500 МБ. Освободите место и запустите обновление снова.")"
+        say "$(t "  ${data_free} MB free on ${data_fs}" "  свободно ${data_free} МБ на ${data_fs}")"
+    fi
+
+    rm -rf "$WORK"
+    install -d -m 700 "$WORK" || fail "$(t "Could not create the download directory ${WORK}." "Не удалось создать каталог для загрузки ${WORK}.")"
+
+    # ------------------------------------------------------ 3. download
+    phase download "$(t "Downloading ${ASSET_BUNDLE} for ${R_latest}" "Загрузка ${ASSET_BUNDLE} для ${R_latest}")"
+    fetch "$R_asset" "$WORK/$ASSET_BUNDLE" \
+        || fail "$(t "The installer for ${R_latest} could not be downloaded. Nothing on this server has been changed." "Не удалось скачать установщик для ${R_latest}. На сервере ничего не было изменено.")"
+    fetch "$R_sums" "$WORK/$ASSET_SUMS" \
+        || fail "$(t "The checksum file for ${R_latest} could not be downloaded, so the installer cannot be verified. Nothing on this server has been changed." "Не удалось скачать файл контрольных сумм для ${R_latest}, проверить установщик невозможно. На сервере ничего не было изменено.")"
+    say "$(t "  $(du -h "$WORK/$ASSET_BUNDLE" | cut -f1) downloaded" "  скачано $(du -h "$WORK/$ASSET_BUNDLE" | cut -f1)")"
+
+    # ------------------------------------------------------ 4. verify
+    #
+    # Not a formality. This file is about to be run as root, and it is fetched
+    # over the public internet from a host neither end of this controls. The
+    # checksum published beside it is the only statement anybody made about
+    # what the bytes should be, so an update that skipped this would be an
+    # update that executed whatever arrived.
+    phase verify "$(t "Checking the download against ${ASSET_SUMS}" "Сверка загруженного файла с ${ASSET_SUMS}")"
+    local want got
+    want=$(awk -v f="$ASSET_BUNDLE" '$2 == f || $2 == "*" f { print $1; exit }' "$WORK/$ASSET_SUMS")
+    [[ -n "$want" ]] || fail "$(t "${ASSET_SUMS} for ${R_latest} does not mention ${ASSET_BUNDLE}, so the download cannot be verified. Nothing on this server has been changed." "В файле ${ASSET_SUMS} для ${R_latest} не упомянут ${ASSET_BUNDLE}, проверить загрузку невозможно. На сервере ничего не было изменено.")"
+    got=$(sha256sum "$WORK/$ASSET_BUNDLE" | awk '{print $1}')
+    [[ "$want" == "$got" ]] || fail "$(t "The downloaded installer does not match the checksum published for ${R_latest} (expected ${want}, got ${got}). It was discarded and nothing on this server has been changed." "Контрольная сумма скачанного установщика не совпадает с опубликованной для ${R_latest} (ожидалось ${want}, получено ${got}). Файл отклонён, на сервере ничего не было изменено.")"
+    say "$(t "  sha256 ${got} matches" "  sha256 ${got} совпадает")"
+
+    # And that it is the shape of thing it claims to be, before it is run as
+    # root: a bundle is a shell prologue with a tar.gz after a marker line, and
+    # --help unpacks it and asks the installer inside for its usage. A file that
+    # cannot do that is not one to hand to bash.
+    head -1 "$WORK/$ASSET_BUNDLE" | grep -q '^#!/bin/bash' \
+        || fail "$(t "The downloaded file is not a shell installer. It was discarded and nothing on this server has been changed." "Скачанный файл не является shell-установщиком. Он отклонён, на сервере ничего не было изменено.")"
+    # TMPDIR, here and at the install below, for the reason the bundle streams
+    # its payload in the first place: it unpacks itself into a temporary
+    # directory, and /tmp is a tmpfs on a good half of the images this runs on
+    # - so the default would put the whole payload in RAM, twice, on a box that
+    # is about to compile a kernel module. $WORK is on the same disk the
+    # download already landed on, and the bundle's own trap still clears it.
+    TMPDIR="$WORK" bash "$WORK/$ASSET_BUNDLE" --help >/dev/null 2>&1 \
+        || fail "$(t "The downloaded installer will not unpack, so it arrived damaged. It was discarded and nothing on this server has been changed." "Скачанный установщик не распаковывается — файл повреждён при загрузке. Он отклонён, на сервере ничего не было изменено.")"
+    say "$(t "  the bundle unpacks and answers --help" "  пакет распаковывается и отвечает на --help")"
+
+    # ------------------------------------------------------ 5. backup
+    #
+    # Before anything is replaced, and through the panel's own backup engine
+    # rather than a tar written here: that engine folds the live traffic
+    # counters in, checkpoints the SQLite WAL back into the database - the
+    # archive carries no -wal, so anything still only in the log would be
+    # missing from the restore - and takes the config tree under the same lock
+    # the panel writes it with. A copy of those files taken any other way can be
+    # a database mid-transaction, or a -wal beside a database it does not match.
+    phase backup "$(t "Backing up the configuration and the database" "Создание резервной копии конфигурации и базы данных")"
+    local stamp archive
+    stamp=$(date -u +%Y%m%d-%H%M%S)
+    archive="$BACKUP_DIR/awg-backup-${stamp}.tar.gz"
+    install -d -m 700 "$BACKUP_DIR" 2>/dev/null || true
+    if (cd "$PREFIX" && "$PREFIX/.venv/bin/python" manage.py backup --output "$archive"); then
+        state_set backup="$archive"
+        say "  $archive ($(du -h "$archive" 2>/dev/null | cut -f1))"
+        prune_backups
+    elif (( skip_backup )); then
+        say "$(t "  the backup failed, and --skip-backup was given, so the update goes on" "  резервная копия не удалась, но указан --skip-backup, поэтому обновление продолжается")"
+        state_set backup=""
+    else
+        fail "$(t "The pre-update backup could not be taken, so the update stopped before changing anything. Take one from the panel (Settings, then Backup), or run: awg-update apply --skip-backup" "Не удалось создать резервную копию перед обновлением, работа остановлена до внесения изменений. Создайте копию в панели (Настройки, затем Резервная копия) или запустите: awg-update apply --skip-backup")"
+    fi
+
+    # ------------------------------------------------------ 6. install
+    #
+    # --no-ask because there is nobody here to answer. install.sh reads an
+    # existing tunnel and an existing panel as answers already given, so a run
+    # with no flags keeps the port, the subnet, the keys, every client, the
+    # panel's port, its base path and its account exactly as they are - and
+    # rebuilds the module, the tools, the panel's code and its UI around them.
+    #
+    # Through bash rather than executed, for the reason install.sh itself gives:
+    # the bundle unpacks into a temp directory and /tmp is mounted noexec on
+    # plenty of hardened servers.
+    phase install "$(t "Installing ${R_latest} - this takes a few minutes" "Установка ${R_latest} — это займёт несколько минут")"
+    say "$(t "  the tunnel drops for a few seconds near the end, and the panel restarts" "  ближе к концу туннель пропадёт на несколько секунд, а панель перезапустится")"
+    say ""
+    if TMPDIR="$WORK" bash "$WORK/$ASSET_BUNDLE" --no-ask; then
+        say ""
+        say "$(t "  the installer finished" "  установщик отработал")"
+    else
+        local rc=$?
+        fail "$(t "The installer exited ${rc}. The log above says where it stopped. Your configuration and the backup at $(state_get backup) were not touched by the failure; docs/UPDATES.md says how to recover." "Установщик завершил работу с кодом ${rc}. В журнале выше указано, на чём он остановился. Конфигурация и резервная копия в $(state_get backup) не затронуты сбоем; инструкция по восстановлению: docs/UPDATES.md.")"
+    fi
+
+    # ------------------------------------------------------ 7. confirm
+    #
+    # An installer that exits 0 has done its work; whether the server came back
+    # is a different question, and it is the one the operator actually asked.
+    phase confirm "$(t "Checking the server came back up" "Проверка возобновления работы сервера")"
+    local now_version; now_version=$(installed_version)
+    say "$(t "  version    ${now_version}" "  версия     ${now_version}")"
+
+    # "activating" is the only answer worth waiting on. systemctl restart blocks
+    # until the unit has settled, so by the time the installer returned this is
+    # normally already active or already failed - and a unit that is not there
+    # says inactive and will go on saying it for as long as anybody waits.
+    local waited=0 web=""
+    if command -v systemctl >/dev/null 2>&1; then
+        while :; do
+            web=$(systemctl is-active awg-panel-web 2>/dev/null)
+            [[ "$web" == "activating" ]] || break
+            (( waited >= 30 )) && break
+            sleep 2; waited=$(( waited + 2 ))
+        done
+    fi
+    say "$(t "  web        ${web:-unknown}" "  веб        ${web:-неизвестно}")"
+    say "$(t "  collector  $(systemctl is-active awg-panel-collector 2>/dev/null)" "  сборщик    $(systemctl is-active awg-panel-collector 2>/dev/null)")"
+    local tunnel=down
+    ip link show "$IFACE" >/dev/null 2>&1 && tunnel=up
+    say "$(t "  tunnel     ${IFACE} ${tunnel}" "  туннель    ${IFACE} ${tunnel}")"
+
+    rm -rf "$WORK"
+
+    local trouble=()
+    [[ "$web" == "active" ]] || trouble+=("$(t "the web service is ${web:-not running}" "веб-служба ${web:-не запущена}")")
+    [[ "$tunnel" == "up" ]]  || trouble+=("$(t "the tunnel ${IFACE} is down" "туннель ${IFACE} не поднят")")
+    if (( ${#trouble[@]} )); then
+        # Joined by hand. Star-expanding an array pads it with the *first*
+        # character of IFS and nothing else, so an IFS of ", " ran the two
+        # halves together as "the web service is inactive,the tunnel is down"
+        # on the one line an operator reads when an update has gone wrong.
+        local joined
+        joined=$(printf '%s, ' "${trouble[@]}"); joined=${joined%, }
+        # Not a failed install - the code is the new version and the data is
+        # intact - but not something to report as a success either. Both are
+        # said, in that order, because an operator reading this needs to know
+        # which half went wrong before they know what to do about it.
+        state_set status=failed finished="$(now)" phase=confirm \
+            detail="$(t "Version ${now_version} is installed, but ${joined}. See: awg-update log" \
+                        "Установлена версия ${now_version}, однако ${joined}. См.: awg-update log")"
+        say ""
+        say "$(t "FAILED to come back up: ${joined}" "СБОЙ при запуске служб: ${joined}")"
+        say "$(t "  the ${now_version} code is installed and your data is untouched;" "  код версии ${now_version} установлен, ваши данные не затронуты;")"
+        say "$(t "  see 'journalctl -u awg-panel-web -n 50' and docs/UPDATES.md" "  см. 'journalctl -u awg-panel-web -n 50' и docs/UPDATES.md")"
+        exit 1
+    fi
+
+    state_set status=succeeded finished="$(now)" phase=done \
+        detail="$(t "Updated from ${R_current} to ${now_version}. The panel and the tunnel are back up." "Обновлено с ${R_current} до ${now_version}. Панель и туннель снова работают.")"
+    say ""
+    say "$(t "DONE: ${R_current} -> ${now_version}" "ГОТОВО: ${R_current} -> ${now_version}")"
+    say "$(t "  the panel and the tunnel are back up" "  панель и туннель снова работают")"
+    [[ -n "$(state_get backup)" ]] && say "$(t "  the pre-update backup is at $(state_get backup)" "  резервная копия перед обновлением находится в $(state_get backup)")"
+    return 0
+}
+
+# The worker, as the transient unit runs it. Everything it prints goes to the
+# log, and the trap makes sure a crash on any path still leaves a state file
+# somebody can read rather than one that says "running" forever.
+cmd_run() {
+    local force=0 skip_backup=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force) force=1; shift ;;
+            --skip-backup) skip_backup=1; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    exec 9>"$LOCK" || die "$(t "cannot open $LOCK" "не удалось открыть $LOCK")"
+    flock -n 9 || die "$(t "another update is already running (awg-update status)" "другое обновление уже выполняется (awg-update status)")"
+
+    : > "$LOG"
+    chmod 600 "$LOG" 2>/dev/null || true
+    exec >>"$LOG" 2>&1
+
+    trap '[[ "$(state_get status)" == "running" ]] && state_set status=failed \
+          finished="$(now)" detail="$(t "The update stopped before it finished. See: awg-update log" \
+                                        "Обновление остановилось, не завершившись. См.: awg-update log")"' EXIT
+
+    do_update "$force" "$skip_backup"
+}
+
+# ---------------------------------------------------------------- start
+
+# Hand the work to systemd and come back. --collect so a run that fails does not
+# leave the unit name taken in a failed state, which would make every later
+# update refuse to start; reset-failed first for the one left by a version of
+# this that did not.
+cmd_start() {
+    case "$(settled_status)" in
+        running) die "$(t "an update is already running (awg-update status)" "обновление уже выполняется (awg-update status)")" ;;
+    esac
+    if [[ ! -f "$RELEASE_PY" ]]; then
+        die "$(t "the release helper is missing at ${RELEASE_PY}; reinstall the panel" "отсутствует вспомогательный скрипт релизов ${RELEASE_PY}; переустановите панель")"
+    fi
+
+    state_set status=running phase=starting started="$(now)" finished="" \
+        detail="$(t "Starting the update." "Запуск обновления.")" from_version="$(installed_version)" to_version="" backup="" \
+        pid="" pid_start="" boot="$(boot_id)" unit="$UNIT"
+    : > "$LOG"
+    chmod 600 "$LOG" 2>/dev/null || true
+
+    systemctl reset-failed "${UNIT}.service" >/dev/null 2>&1 || true
+    if systemd-run --unit="$UNIT" --collect --service-type=exec \
+         --description="AWG Panel update" \
+         --property=KillMode=mixed --property=TimeoutStartSec=infinity \
+         "$SELF" run "$@" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # No systemd, or systemd-run refused. setsid puts the worker in its own
+    # session so it outlives this shell and whatever started it, which is the
+    # whole property the transient unit was there for.
+    setsid nohup "$SELF" run "$@" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    state_set unit=""
+    return 0
+}
+
+# start, then print the log as it is written and end on the verdict. What the
+# menu runs, and what somebody at an SSH prompt wants: the work is still in its
+# own unit, so a dropped connection loses the view of the update and not the
+# update.
+cmd_apply() {
+    cmd_start "$@" || return 1
+    printf '%s%s%s %s\n' "$B" "$(t "Updating." "Обновление.")" "$N" \
+        "$(t "The work runs in its own systemd unit, so closing this" \
+            "Процесс запущен в отдельном systemd-юните, поэтому закрытие этого")"
+    printf '%s\n\n' "$(t "terminal will not stop it. Come back with: awg-update status" \
+                         "терминала не остановит его. Проверить статус: awg-update status")"
+
+    local shown=0 total status waited=0
+    while :; do
+        total=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+        if (( total > shown )); then
+            sed -n "$((shown + 1)),${total}p" "$LOG"
+            shown=$total
+        fi
+        status=$(settled_status)
+        case "$status" in succeeded|failed|idle) break ;; esac
+        # A worker that never wrote a line and never came alive is one that was
+        # never started at all, and waiting on it forever helps nobody.
+        if (( shown == 0 )) && ! worker_alive; then
+            waited=$(( waited + 1 ))
+            (( waited > 30 )) && { printf '\n%s%s%s %s\n' \
+                "$R" "$(t "error:" "ошибка:")" "$N" \
+                "$(t "the update did not start; see: journalctl -u ${UNIT}" \
+                    "обновление не запустилось; см.: journalctl -u ${UNIT}")" >&2; return 1; }
+        fi
+        sleep 1
+    done
+
+    # Whatever landed between the last read and the status flipping.
+    total=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+    (( total > shown )) && sed -n "$((shown + 1)),${total}p" "$LOG"
+
+    [[ "$status" == "succeeded" ]] && return 0
+    return 1
+}
+
+# ---------------------------------------------------------------- main
+cmd="$1"; shift
+case "$cmd" in
+    check)  cmd_check "$@" ;;
+    apply)  cmd_apply "$@" ;;
+    start)  cmd_start "$@" && printf '%s\n' "$(t "started; follow it with: awg-update status" "запущено; следите за ходом: awg-update status")" ;;
+    run)    cmd_run "$@" ;;
+    status) cmd_status "$@" ;;
+    log)    cmd_log "$@" ;;
+    cancel) cmd_cancel "$@" ;;
+    *) echo "unknown command '$cmd' (try: awg-update help)" >&2; exit 1 ;;
+esac

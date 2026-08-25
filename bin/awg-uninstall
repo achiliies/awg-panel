@@ -1,0 +1,421 @@
+#!/bin/bash
+#
+# awg-uninstall - remove an AWG Panel installation made by install.sh
+#
+# Best-effort teardown, and a complete one: it stops the tunnel, unregisters
+# the DKMS module, removes the built tools, the web panel, the management
+# scripts, the panel's TLS certificate and its renewal timer, reverts sysctl
+# and any ufw/firewalld rule the installer added, and deletes the config
+# directory and the panel's database with them. What is left afterwards is a
+# machine with no sign that any of this was ever on it.
+#
+# Removing everything is what uninstalling means, and it is the default here
+# because the alternative was worse than untidy: a config directory left behind
+# holds the server's private key, every client's, and the panel's account
+# database, so "uninstalled" used to leave the entire secret half of the
+# installation sitting in /etc for whoever came next. --keep-config is still
+# there for the one case that wants it - taking the software off a box the
+# server is going straight back onto - and it says so before it does it.
+#
+set -uo pipefail
+
+SRC_DIR="/usr/local/src/amneziawg"
+SHARE_DIR="/usr/local/share/awg-script"
+
+usage() {
+    cat <<'USAGE'
+awg-uninstall - remove AWG Panel completely (tunnel, module, tools, web
+                panel, certificate, firewall rule, configuration and data)
+
+  --yes           do not ask for confirmation
+  --keep-config   keep /etc/amnezia/amneziawg and /var/lib/awg-panel
+                  (server key, clients, traffic history, panel accounts)
+                  and the panel's certificate, so a later install.sh run
+                  picks everything back up
+  --purge         accepted and ignored: deleting the configuration is
+                  what this does anyway now
+
+Everything it deletes is gone for good. Take a backup from the panel
+first - Settings, then Backup - if any of the clients or the history
+still matter.
+USAGE
+}
+
+# Answer --help before the root re-exec so it works unprivileged.
+case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+
+[[ ${EUID} -ne 0 ]] && exec sudo -- "$0" "$@"
+
+# ----------------------------------------------------------- shared library
+# lib/ sits beside bin/ in the checkout and the bundle; an installed tool
+# finds the copy install.sh keeps under /usr/local/share/awg-script.
+# AWG_LIB_DIR overrides both - the test harnesses use it.
+AWG_LIB="${AWG_LIB_DIR:-}"
+if [[ -z "$AWG_LIB" ]]; then
+    AWG_SELF=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+    if [[ -f "$AWG_SELF/../lib/common.sh" ]]; then
+        AWG_LIB="$AWG_SELF/../lib"
+    else
+        AWG_LIB="$SHARE_DIR/lib"
+    fi
+fi
+[[ -f "$AWG_LIB/common.sh" ]] || {
+    echo "error: shared lib not found at $AWG_LIB (set AWG_LIB_DIR)" >&2; exit 1; }
+# shellcheck source=lib/common.sh
+. "$AWG_LIB/common.sh"
+# shellcheck source=lib/conf.sh
+. "$AWG_LIB/conf.sh"
+# shellcheck source=lib/firewall.sh
+. "$AWG_LIB/firewall.sh"
+# shellcheck source=lib/panel.sh
+. "$AWG_LIB/panel.sh"
+# shellcheck source=lib/acme.sh
+. "$AWG_LIB/acme.sh"
+
+# What this machine was installed as, rather than what the library assumed.
+#
+# lib/common.sh takes IFACE and CONF_DIR from the environment and falls back to
+# awg0 and /etc/amnezia/amneziawg. That is right for install.sh, which is told
+# them on the command line, and wrong here. `install.sh --iface awg1` is a
+# supported install and a documented flag; what it chose was recorded in the
+# panel's env file - AWG_IFACE and AWG_CONF_DIR, written by
+# panel/install-panel.sh - and not in the environment of whatever shell runs
+# the uninstall months later.
+#
+# So an uninstall on such a box stopped awg0, disabled awg-quick@awg0, deleted
+# awg-quick@awg0.service.d, and then deleted the config directory that held the
+# only record of awg1. It reported success on all of it. The real tunnel stayed
+# up with its unit still enabled and the awg tools removed from under it, so
+# the next boot brought up nothing and gave no reason.
+#
+# The environment still wins where it is set: that is how the test harnesses
+# point this at a fixture, and an operator who exports AWG_IFACE is answering
+# the question directly rather than leaving it to be looked up.
+if [[ -z "${AWG_IFACE:-}" ]]; then
+    RECORDED=$(panel_env_get AWG_IFACE)
+    [[ -n "$RECORDED" ]] && IFACE="$RECORDED"
+fi
+if [[ -z "${AWG_CONF_DIR:-}" ]]; then
+    RECORDED=$(panel_env_get AWG_CONF_DIR)
+    [[ -n "$RECORDED" ]] && CONF_DIR="$RECORDED"
+fi
+unset RECORDED
+# The paths lib/common.sh derived from the two values just replaced. install.sh
+# re-derives SERVER_CONF after --iface for the same reason.
+#
+# ENV_FILE goes with it although nothing in this script reads it, for the same
+# reason lib/common.sh waives SC2034 over the whole set: these are one group of
+# derived paths, and leaving one of them holding a directory the other five have
+# moved off is a trap for whatever reads it next rather than a saving now.
+SERVER_CONF="$CONF_DIR/${IFACE}.conf"
+# shellcheck disable=SC2034
+ENV_FILE="$CONF_DIR/clients.env"
+
+# Every tunnel this run has to take down, not only the one the env file names.
+#
+# The env file is the best record of what was installed and not a guaranteed
+# one: a tunnel installed without the panel never had one written, and an
+# earlier uninstall interrupted partway may have removed it with a unit still
+# registered. What is on the machine is evidence too, so it is read as well -
+# the awg-quick@ instances systemd knows about, running or merely enabled, and
+# the configs in CONF_DIR.
+#
+# Taking all of them rather than one is not overreach. This run removes the
+# kernel module, the awg and awg-quick binaries and the unit template that
+# drives them, so no tunnel on this box works afterwards whatever it is called.
+# Leaving awg1 enabled would leave a unit failing at every boot against tools
+# that are gone, which is the opposite of what this script promises.
+awg_ifaces() {
+    local -A seen=()
+    local unit name f
+    [[ -n "$IFACE" ]] && seen["$IFACE"]=1
+    while read -r unit; do
+        [[ "$unit" == awg-quick@*.service ]] || continue
+        name="${unit#awg-quick@}"; name="${name%.service}"
+        [[ -n "$name" ]] && seen["$name"]=1
+    done < <(
+        { systemctl list-units --all --no-legend --plain 'awg-quick@*.service'
+          systemctl list-unit-files    --no-legend --plain 'awg-quick@*.service'
+        } 2>/dev/null | awk '{print $1}'
+    )
+    for f in "$CONF_DIR"/*.conf; do
+        [[ -f "$f" ]] || continue
+        name=${f##*/}
+        seen["${name%.conf}"]=1
+    done
+    printf '%s\n' "${!seen[@]}" | sort
+}
+mapfile -t IFACES < <(awg_ifaces)
+
+# KEEP is the old --purge inverted. The flag itself is still taken and still
+# does nothing, because it is in the documentation, in the menu's old wording
+# and in whatever notes an admin kept: refusing it would turn a command that
+# used to delete everything into an error, on the one run where the person
+# typing it is already committed to deleting everything.
+YES=0; KEEP=0; SAW_PURGE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --yes)         YES=1;  shift ;;
+        --keep-config) KEEP=1; shift ;;
+        --purge)       SAW_PURGE=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+# Said rather than passed over, so that somebody working from an old note
+# learns the flag has stopped meaning anything instead of going on believing
+# it is what makes the difference.
+(( SAW_PURGE )) && info "$(t "--purge is the default now; there is nothing left for it to turn on" \
+                             "--purge теперь используется по умолчанию; этот флаг больше ничего не включает")"
+(( SAW_PURGE && KEEP )) && \
+    die "$(t "--purge and --keep-config ask for opposite things; drop one" \
+             "--purge и --keep-config требуют противоположного; оставьте что-то одно")"
+
+if (( ! YES )); then
+    if (( KEEP )); then
+        printf '\n%s%s%s\n' "$B" \
+            "$(t "Remove AWG Panel from this server?" \
+                 "Удалить AWG Panel с этого сервера?")" "$N"
+        printf '%s\n' \
+            "$(t "  The tunnel, the module, the tools and the web panel go." \
+                 "  Туннель, модуль, утилиты и веб-панель будут удалены.")"
+        printf '%s\n\n' \
+            "$(t "  ${CONF_DIR} and ${PANEL_DATA} are kept." \
+                 "  ${CONF_DIR} и ${PANEL_DATA} сохраняются.")"
+    else
+        # Short, and specific about the two things that are not recoverable:
+        # the keys every issued client config depends on, and the database
+        # behind every number the panel ever showed. Whoever is reading this
+        # has one chance to stop.
+        printf '\n%s%s%s\n' "$B" \
+            "$(t "Remove AWG Panel and everything it holds?" \
+                 "Удалить AWG Panel и всё, что в ней лежит?")" "$N"
+        printf '%s\n' \
+            "$(t "  This deletes the server key, every client and their keys," \
+                 "  Будут удалены ключ сервера, все клиенты и их ключи,")"
+        printf '%s\n' \
+            "$(t "  the panel with its accounts and traffic history, and the" \
+                 "  панель с её учётными записями и историей трафика, а также")"
+        printf '%s\n' \
+            "$(t "  certificate. Every client config stops working, and none of" \
+                 "  сертификат. Конфигурации всех клиентов перестанут работать, и")"
+        printf '%s\n\n' \
+            "$(t "  it can be recovered afterwards." \
+                 "  ничего из этого потом не восстановить.")"
+        printf '  %s%s%s%s\n' "$Y" \
+            "$(t "Back it up first if you still need it" \
+                 "Сначала сделайте резервную копию, если она ещё нужна")" "$N" \
+            "$(t ": open the panel," \
+                 ": откройте панель,")"
+        printf '%s\n\n' \
+            "$(t "  Settings, then Backup. Do that before answering." \
+                 "  Настройки, затем Резервная копия. Сделайте это перед ответом.")"
+    fi
+    read -r -p "$(t "[y/N] " "[д/Н] ")" a
+    # "y" is taken in either language and "д" only in Russian, the rule
+    # acme_ask_yn in lib/acme.sh settled on and for its reasons: somebody
+    # working in Russian on an English-keyboard server types "y" as often as
+    # "д", while "д" at an English prompt has no such excuse and taking it
+    # would only hide that the language never got set. Nothing longer is
+    # accepted here, because nothing longer was accepted before either.
+    [[ "$a" =~ ^[Yy]$ ]] || { is_ru && [[ "$a" =~ ^[Дд]$ ]]; } \
+        || { echo "$(t "aborted" "отменено")"; exit 1; }
+fi
+
+# Read the listen ports for the firewall cleanup before anything goes away.
+# One per tunnel: install.sh opened a rule for each port it chose, and a box
+# with two tunnels on it has two rules to take back.
+PORTS=()
+for _if in "${IFACES[@]}"; do
+    SERVER_CONF="$CONF_DIR/${_if}.conf"
+    [[ -f "$SERVER_CONF" ]] || continue
+    _port=$(iface_get ListenPort)
+    [[ -n "$_port" ]] && PORTS+=("$_port")
+done
+SERVER_CONF="$CONF_DIR/${IFACE}.conf"
+unset _if _port
+
+step "$(t "Stopping the tunnel" "Останавливаем туннель")"
+for _if in "${IFACES[@]}"; do
+    systemctl disable --now "awg-quick@${_if}" >/dev/null 2>&1
+    awg-quick down "$_if" >/dev/null 2>&1
+    echo "  $(t "${_if} down, service disabled" "${_if} выключен, служба отключена")"
+done
+unset _if
+
+step "$(t "Removing the web panel" "Удаляем веб-панель")"
+# Stopped first: the collector writes traffic.db, and it should not be
+# running while the config directory is being taken apart.
+#
+# panel_remove runs either way. Every piece of it is removed by name and
+# missing pieces cost nothing, and "installed" is not the only state a panel
+# is ever in: an install interrupted partway leaves the env file, a unit or
+# the CLI behind without the prefix panel_installed looks for, and each of
+# those on its own is something this run was supposed to take away.
+HAD_PANEL=0; panel_installed && HAD_PANEL=1
+panel_remove
+if (( HAD_PANEL )); then
+    echo "  $(t "services, ${PANEL_PREFIX} and the env file removed" \
+                "службы, ${PANEL_PREFIX} и env-файл удалены")"
+else
+    echo "  $(t "not installed - anything left of one removed" \
+                "не была установлена — всё, что оставалось, удалено")"
+fi
+
+step "$(t "Removing the panel's certificate" "Удаляем сертификат панели")"
+# After the panel, because the deploy hook restarts it and the timer renews
+# what it serves: with the service already gone, neither has anything left to
+# act on while this takes them apart.
+if (( KEEP )); then
+    acme_remove --keep-cert
+else
+    acme_remove
+fi
+
+step "$(t "Removing the kernel module" "Удаляем модуль ядра")"
+# Every registered version, not the first one dkms happens to list. A server
+# that has been through a few upgrades has one entry per module version it has
+# built, and taking one away leaves the others registered against the running
+# kernel - a module this uninstall is meant to have removed, still there to be
+# loaded, and rebuilt again by dkms at the next kernel upgrade.
+mapfile -t VERS < <(dkms status amneziawg 2>/dev/null |
+    sed -n 's|^amneziawg[/,][[:space:]]*\([^,:]*\).*|\1|p' | sort -u)
+for VER in "${VERS[@]}"; do
+    [[ -n "$VER" ]] || continue
+    dkms remove -m amneziawg -v "$VER" --all >/dev/null 2>&1
+    rm -rf "/usr/src/amneziawg-${VER}"
+    echo "  $(t "dkms: removed amneziawg/${VER}" "dkms: удалён amneziawg/${VER}")"
+done
+(( ${#VERS[@]} )) || echo "  $(t "dkms: nothing registered" "dkms: ничего не зарегистрировано")"
+modprobe -r amneziawg 2>/dev/null
+depmod -a 2>/dev/null
+# Unloading can fail - anything still holding a reference keeps the module in
+# the kernel until the machine restarts. The files are gone either way, so
+# nothing will load it again, but the closing report should not claim the
+# kernel is clear when `lsmod` still lists it.
+MOD_LOADED=0
+[[ -d /sys/module/amneziawg ]] && MOD_LOADED=1
+
+step "$(t "Removing the tools" "Удаляем утилиты")"
+rm -f /usr/bin/awg /usr/bin/awg-quick /usr/local/bin/awg /usr/local/bin/awg-quick
+rm -f /usr/lib/systemd/system/awg-quick@.service /lib/systemd/system/awg-quick@.service
+# The drop-in install.sh writes to order the tunnel after DKMS's boot-time
+# rebuild. It outlives the unit file it belongs to - systemd keeps drop-ins in
+# /etc, and nothing under /usr takes them with it - so a machine this ran on
+# would be left with a directory naming a unit that no longer exists.
+for _if in "${IFACES[@]}"; do
+    rm -rf "/etc/systemd/system/awg-quick@${_if}.service.d"
+done
+unset _if
+rm -f /usr/share/bash-completion/completions/awg \
+      /usr/share/bash-completion/completions/awg-quick
+systemctl daemon-reload 2>/dev/null
+rm -rf "$SRC_DIR"
+echo "  $(t "awg, awg-quick, unit file and ${SRC_DIR} removed" \
+            "awg, awg-quick, юнит-файл и ${SRC_DIR} удалены")"
+
+step "$(t "Reverting system settings" "Возвращаем системные настройки")"
+rm -f /etc/sysctl.d/99-amneziawg.conf
+# Deleting the file does not undo what it applied: `sysctl --system` re-reads
+# configuration, it does not reset a value no remaining file mentions. For
+# ip_forward that only leaves a setting behind, but IPv6 forwarding takes
+# something away - a forwarding host stops honouring Router Advertisements, so
+# a machine that took its own IPv6 default route from one would lose it when
+# that advertisement next expired, quietly, some minutes after this script said
+# it had finished. So it is put back explicitly, and only then is what is left
+# re-read, which lets another package's setting win over this zero.
+sysctl -qw net.ipv6.conf.all.forwarding=0 >/dev/null 2>&1
+sysctl -q --system >/dev/null 2>&1
+for _port in "${PORTS[@]+"${PORTS[@]}"}"; do
+    fw_delete "$_port" udp
+    if [[ -n "$FW_HANDLED" ]]; then
+        echo "  $(t "${FW_HANDLED}: removed ${_port}/udp" "${FW_HANDLED}: удалён ${_port}/udp")"
+    fi
+done
+unset _port
+# The ip6tables rules need no line here: they are PostDown hooks, and the
+# `awg-quick down` above ran them.
+echo "  $(t "ip_forward and IPv6 forwarding overrides removed" \
+            "переопределения ip_forward и пересылки IPv6 удалены")"
+
+# Which of the two were here at all, read before either is touched, because
+# "deleted" said of a directory that was never on the machine is the kind of
+# line that sends somebody looking for what else this tool has misunderstood
+# about their server.
+HAD_CONF=0; [[ -d "$CONF_DIR"   ]] && HAD_CONF=1
+HAD_DATA=0; [[ -d "$PANEL_DATA" ]] && HAD_DATA=1
+
+if (( KEEP )); then
+    step "$(t "Keeping the configuration" "Сохраняем конфигурацию")"
+    (( HAD_CONF )) && echo "  $(t "${CONF_DIR} kept (server key, clients, traffic history)" \
+                                  "${CONF_DIR} сохранён (ключ сервера, клиенты, история трафика)")"
+    (( HAD_DATA )) && echo "  $(t "${PANEL_DATA} kept (panel accounts, quotas, history)" \
+                                  "${PANEL_DATA} сохранён (учётные записи панели, квоты, история)")"
+    if (( HAD_CONF || HAD_DATA )); then
+        echo "  $(t "a later install.sh run picks it up" \
+                    "последующий запуск install.sh подхватит эти данные")"
+    else
+        echo "  $(t "there was none to keep" "нечего было сохранять")"
+    fi
+else
+    step "$(t "Deleting the configuration and data" "Удаляем конфигурацию и данные")"
+    rm -rf "$CONF_DIR" "$PANEL_DATA"
+    # /etc/amnezia is this project's directory but not necessarily only its
+    # own - Amnezia's own client writes under it too - so it goes only when
+    # nothing is left in it.
+    rmdir /etc/amnezia 2>/dev/null
+    (( HAD_CONF )) && echo "  $(t "${CONF_DIR} deleted (server key, clients, traffic history)" \
+                                  "${CONF_DIR} удалён (ключ сервера, клиенты, история трафика)")"
+    (( HAD_DATA )) && echo "  $(t "${PANEL_DATA} deleted (panel accounts, quotas, history)" \
+                                  "${PANEL_DATA} удалён (учётные записи панели, квоты, история)")"
+    (( HAD_CONF || HAD_DATA )) || echo "  $(t "there was none to delete" "нечего было удалять")"
+fi
+
+step "$(t "Removing the management scripts" "Удаляем скрипты управления")"
+rm -f /usr/local/bin/awg-client /usr/local/bin/awg-menu /usr/local/bin/awg-update
+rm -rf "$SHARE_DIR"
+# An update running right now would be the one thing that could put all of this
+# back a minute after it went. It cannot have been started from here - this menu
+# entry and that one are the same screen - but it can have been started from the
+# panel or another session, and stopping the transient unit is the only way to
+# say so. Nothing to clean up beyond it: its state lives under /var/lib/awg-panel
+# with the rest of the panel's data, which the step above has already dealt with
+# according to --keep-config.
+systemctl stop awg-panel-update.service >/dev/null 2>&1
+# systemd keeps a failed unit in its list after the unit file is gone, so a
+# `systemctl status` on the way out still names services this just removed.
+systemctl reset-failed >/dev/null 2>&1
+echo "  $(t "awg-menu, awg-update and ${SHARE_DIR} removed" \
+            "awg-menu, awg-update и ${SHARE_DIR} удалены")"
+
+# ------------------------------------------------------------------ report
+#
+# One question is left at this point - is it gone - and the eight-line report
+# that used to print here answered it in the middle of seven other lines
+# nobody had asked for. Each step above already said what it did as it did it,
+# so restating all of it under a banner only buried the answer. One line now,
+# and a second only when the machine is genuinely not finished with: data that
+# --keep-config held on to, or a module the kernel would not release. Both are
+# things the admin still has to act on; everything else is done.
+DATA_PATHS=()
+(( HAD_CONF )) && DATA_PATHS+=("$CONF_DIR")
+(( HAD_DATA )) && DATA_PATHS+=("$PANEL_DATA")
+DATA_LIST="${DATA_PATHS[0]:-}"
+(( ${#DATA_PATHS[@]} > 1 )) && DATA_LIST="${DATA_PATHS[0]} $(t "and" "и") ${DATA_PATHS[1]}"
+
+echo
+if (( KEEP && ${#DATA_PATHS[@]} )); then
+    echo "$(t "${B}AWG Panel removed.${N} Kept ${DATA_LIST} - a later install.sh picks it up." \
+              "${B}AWG Panel удалена.${N} Сохранено: ${DATA_LIST} — последующий запуск install.sh подхватит эти данные.")"
+    echo "$(t "To finish by hand: ${B}sudo rm -rf ${DATA_PATHS[*]}${N}" \
+              "Чтобы завершить удаление вручную: ${B}sudo rm -rf ${DATA_PATHS[*]}${N}")"
+else
+    echo "$(t "${B}AWG Panel removed${N} - tunnel, module, tools, panel, certificate and data all gone." \
+              "${B}AWG Panel удалена${N} — туннель, модуль, утилиты, панель, сертификат и данные полностью удалены.")"
+    (( MOD_LOADED )) && echo "$(t "The kernel module stays loaded until the next reboot." \
+                                  "Модуль ядра останется загруженным до следующей перезагрузки.")"
+fi
+echo
+
+rm -f /usr/local/bin/awg-uninstall

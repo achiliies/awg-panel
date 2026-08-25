@@ -1,0 +1,54 @@
+# What must not reach the image, for `docker build -f panel/Dockerfile panel`.
+#
+# The Dockerfile copies the whole context in one `COPY . .`, and until this file
+# existed there was nothing between that and whatever the person building had
+# left in panel/. .gitignore does not apply to a build context, so the very
+# files it exists to keep out of the repository - a development database, a
+# generated signing key, a 130 MB virtualenv - were the files being baked into a
+# distributable image.
+#
+# The secrets are the reason this is not merely a size fix. .dev/data/secret.key
+# is the Django signing key `make dev` generates, and .dev/data/db.sqlite3 holds
+# the accounts and sessions that went with it. Neither is what the container runs
+# on - AWG_PANEL_DATA points at /var/lib/awg-panel, so a fresh key is made on
+# first start - but both are a developer's credentials, shipped to whoever pulls
+# the image, in a file nothing would ever think to look at.
+#
+# release.yml's source tarball already excludes this same set. That list and this
+# one are the two ways the project hands out a copy of itself, and they should
+# keep saying the same thing.
+
+# The virtualenv. 130 MB of the wrong architecture's wheels as often as not, and
+# the image builds its own from the locks a few lines above the COPY.
+.venv
+.lockgen
+
+# Runtime state from `make dev`, `make test` and `make demo`. The signing key and
+# the account database live in here.
+.dev
+.demo
+db.sqlite3
+staticfiles
+
+# Node's tree, which is 219 MB and which the image has no use for: the UI is
+# built before the image is, and only frontend/dist is copied in.
+#
+# frontend/dist is deliberately NOT listed. It is the built SPA, the Dockerfile
+# fails the build without it, and it is the one artifact here that must be
+# copied.
+**/node_modules
+
+# Caches, and the wheels fetch-wheels.sh downloads for the offline installer -
+# the image installs from the locks over the network instead.
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+wheels
+
+# Nothing in the image reads these, and a stale one is a misleading thing to
+# find inside a container.
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
