@@ -1466,6 +1466,14 @@ acme_tty_open() {
     ACME_FD=0
     [[ -e /dev/tty ]] || return 1
     { exec {ACME_FD}<>/dev/tty; } 2>/dev/null || return 1
+    # acme_tty_drain sets ICANON off for its -n and acme_tty_ask reads, and a
+    # shell that is not the foreground process group of this terminal is
+    # stopped by SIGTTOU or SIGTTIN for doing either - silently, mid-install.
+    # See the same trap beside install.sh's own descriptor for the sudo-rs pty
+    # that puts it there. Set here as well because this file is also sourced by
+    # awg-menu and awg-uninstall, which reach these questions without going
+    # through install.sh at all.
+    trap '' TTOU TTIN
     return 0
 }
 
@@ -1517,7 +1525,7 @@ acme_ask() {
     ACME_REPLY=""
     acme_tty_drain
     printf '\n%s%s%s ' "$B" "$1" "$N" >&"$ACME_FD"
-    read -r -u "$ACME_FD" ACME_REPLY || return 1
+    read -r -u "$ACME_FD" ACME_REPLY 2>/dev/null || return 1
     return 0
 }
 

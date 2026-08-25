@@ -124,7 +124,8 @@ some other means. Run one upgrade by hand and every later one can start from the
 page:
 
 ```bash
-curl -fsSL https://github.com/achiliies/awg-panel/releases/latest/download/get.sh | sudo bash
+curl -fsSLO https://github.com/achiliies/awg-panel/releases/latest/download/get.sh
+sudo bash get.sh
 ```
 
 That is the ordinary install command, and re-running it on a server that already

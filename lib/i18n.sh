@@ -188,7 +188,37 @@ prompt_installer_language() {
     fi
     local lang_in=""
     printf '\n  %s[Enter = %s]:%s ' "$B" "$def" "$N" >&3
-    read -r -u 3 lang_in || { ASK_TTY=0; LANG_CHOICE="$def"; return 0; }
+    # A descriptor that opened and will not read. End of file is one way -
+    # Ctrl-D, a session that went away - and EIO is the other, which is what a
+    # terminal nobody can type into returns once SIGTTIN is ignored.
+    #
+    # Ubuntu 26.04 reaches the second one on the documented command. sudo there
+    # is sudo-rs, which runs what it is given under a pty of its own and feeds
+    # that pty from its own stdin - and on `curl ... | sudo bash` its stdin is
+    # the pipe carrying get.sh, not the operator. So /dev/tty inside is a real
+    # terminal that is simply not theirs, and no keystroke ever arrives on it.
+    #
+    # Both ways out are the same: stop asking and take the defaults. The
+    # difference is that this one has a person sitting in front of it who is
+    # about to watch an unattended install go past, so it says so, and says
+    # what to run instead to get the questions back.
+    if ! read -r -u 3 lang_in 2>/dev/null; then
+        ASK_TTY=0
+        LANG_CHOICE="$def"
+        printf '\n\n'
+        printf '  %s\n' "$(t "This terminal cannot be read, so nothing can be asked and every" \
+                              "Этот терминал недоступен для чтения, поэтому вопросы задать нельзя")"
+        printf '  %s\n' "$(t "question below takes its default. The install itself is unaffected." \
+                              "и на все вопросы будут взяты значения по умолчанию. На саму установку это не влияет.")"
+        printf '\n'
+        printf '  %s\n' "$(t "To answer them, download the installer first and run the file:" \
+                              "Чтобы ответить на них, сначала скачайте установщик и запустите файл:")"
+        printf '\n'
+        printf '    curl -fsSLO https://github.com/achiliies/awg-panel/releases/latest/download/get.sh\n'
+        printf '    sudo bash get.sh\n'
+        printf '\n'
+        return 0
+    fi
     case "${lang_in,,}" in
         ru|rus|russian|ру|рус|русский)      LANG_CHOICE="ru" ;;
         en|eng|english|ен|англ|английский)  LANG_CHOICE="en" ;;

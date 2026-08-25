@@ -2,7 +2,15 @@
 #
 # get.sh - the one command that installs AWG Panel.
 #
-#   curl -fsSL https://github.com/achiliies/awg-panel/releases/latest/download/get.sh | sudo bash
+#   curl -fsSLO https://github.com/achiliies/awg-panel/releases/latest/download/get.sh
+#   sudo bash get.sh
+#
+# Piping this into `sudo bash` installs just as well, and is the right form for
+# an unattended run, but it cannot carry an answer back on Ubuntu 25.10 and
+# later: sudo there is sudo-rs, which runs the command under a pty of its own
+# and feeds that pty from its own stdin - which in a pipeline is curl. The
+# installer says so and takes the default for every question. See the trap
+# beside install.sh's /dev/tty for the rest of what that change cost.
 #
 # What this is for is not the typing it saves. The release bundle carries its
 # payload in its own tail and finds it through ${BASH_SOURCE[0]}, so it cannot
