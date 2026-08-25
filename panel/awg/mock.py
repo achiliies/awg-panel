@@ -25,7 +25,7 @@ from . import keys, paths
 from .controller import Dump, PeerDump
 from .errors import ToolError
 
-MOCK_TOOLS_VERSION = "awg tools v1.0.20241018 (mock)"
+MOCK_TOOLS_VERSION = "amneziawg-tools v3.1.20260812 - https://amnezia.org (mock)"
 MOCK_MODULE_VERSION = "3.0.0 (mock)"
 
 # Roughly this share of peers is connected at any time.

@@ -204,7 +204,7 @@ class AwgController:
         return shutil.which("awg") is not None
 
     def tools_version(self) -> str | None:
-        """First line of `awg --version`, e.g. "awg tools v1.0.20241018"."""
+        """First line of `awg --version`, e.g. "amneziawg-tools v3.1.20260812 - https://amnezia.org"."""
 
         def probe() -> str | None:
             out = _try(["awg", "--version"])

@@ -910,8 +910,8 @@ CATALOG: tuple[Op, ...] = (
         result={
             "ifaceUp": True,
             "moduleLoaded": True,
-            "toolsVersion": "awg tools v1.0.20241018",
-            "moduleVersion": "1.0.0",
+            "toolsVersion": "amneziawg-tools v3.1.20260812 - https://amnezia.org",
+            "moduleVersion": "3.1.20260812",
             "features": {
                 "headerRanges": True,
                 "imitationPackets": True,

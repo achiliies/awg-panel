@@ -892,8 +892,8 @@ Idempotent: starting a tunnel that is already up answers `204`.
 {
   "ifaceUp": true,
   "moduleLoaded": true,
-  "toolsVersion": "awg tools v1.0.20241018",
-  "moduleVersion": "1.0.0",
+  "toolsVersion": "amneziawg-tools v3.1.20260812 - https://amnezia.org",
+  "moduleVersion": "3.1.20260812",
   "features": { "headerRanges": true, "imitationPackets": true,
                 "headerProtectionKey": true, "contentPadding": true, "timers": true },
   "serviceActive": "active",
