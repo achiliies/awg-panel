@@ -104,7 +104,7 @@ AmneziaWG is the engine. **AWG Panel is everything around it** — installed, co
 <tr>
 <td valign="top"><b>Hardened panel</b><br><sub>Two-factor auth, TLS, a secret URL path that keeps scanners off the login page, named API tokens with their own expiry, and a full activity log of who did what.</sub></td>
 <td valign="top"><b>Full REST API</b><br><sub>Everything the panel does, a script can do — with a built-in, searchable API reference and an OpenAPI schema served straight from your own installation.</sub></td>
-<td valign="top"><b>Built to scale</b><br><sub>Over 4,000 clients out of the box; widen the subnet from the panel and the same server addresses up to 16 million. Safe in-place upgrades and a clean uninstaller included.</sub></td>
+<td valign="top"><b>Built to scale</b><br><sub>Tested at over 4,000 clients on a single server. Safe in-place upgrades and a clean uninstaller included — nothing here breaks as you grow.</sub></td>
 </tr>
 </table>
 
