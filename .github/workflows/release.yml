@@ -231,7 +231,8 @@ jobs:
             ## Install
 
             ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/get.sh | sudo bash
+            curl -fsSLO https://github.com/${{ github.repository }}/releases/latest/download/get.sh
+            sudo bash get.sh
             ```
 
             That fetches `awg-panel.sh` from this release,

@@ -161,10 +161,11 @@ is completely compatible with configurations from this panel and provides an eas
 
 ## Installation
 
-One command, on a fresh **Ubuntu or Debian** server, as root:
+Two commands, on a fresh **Ubuntu or Debian** server, as root:
 
 ```bash
-curl -fsSL https://github.com/achiliies/awg-panel/releases/latest/download/get.sh | sudo bash
+curl -fsSLO https://github.com/achiliies/awg-panel/releases/latest/download/get.sh
+sudo bash get.sh
 ```
 
 That is the whole installation. It fetches the installer for the newest release, checks it against
@@ -178,22 +179,39 @@ The script carries the module and tools source at the commits this release pins,
 compiled UI and every Python wheel it needs, so it clones nothing and contacts no package index.
 The only network it wants is `apt`, for `build-essential`, `dkms` and the kernel headers. Nothing else needs to be installed first — not Node, not Python, not a web server.
 
-Anything after `bash -s --` reaches the installer, so the flags further down work here too:
+Every flag further down works here too — `sudo bash get.sh --lang ru --panel-port 8443`, and
+anything else you pass is handed straight to the installer.
+
+### The one-liner, and why it is second
+
+```bash
+curl -fsSL https://github.com/achiliies/awg-panel/releases/latest/download/get.sh | sudo bash
+```
+
+Same script, same checksum, same install — but on Ubuntu 25.10 and later it cannot ask you
+anything, and it says so as it starts. `sudo` on those releases is `sudo-rs`, which runs what it
+is given under a pty of its own and feeds that pty from its own standard input. In a pipeline
+that input is `curl`, not you, so `/dev/tty` inside the installer is a terminal no keystroke ever
+reaches. The install still completes; it simply takes the default for every question. Where
+`sudo` is the C implementation — Ubuntu 24.04, Debian — no pty is involved and the one-liner
+asks normally.
+
+So it stays the right form for an unattended install, and takes flags through `bash -s --`:
 
 ```bash
 curl -fsSL https://github.com/achiliies/awg-panel/releases/latest/download/get.sh \
-  | sudo bash -s -- --lang ru --panel-port 8443
+  | sudo bash -s -- --no-ask --lang ru --panel-port 8443
 ```
 
-Piping a URL into `sudo bash` is a fair thing to object to, and the same install is two commands
-if you would rather hold the file first:
+If you would rather hold the installer itself than the script that fetches it, the bundle is
+downloadable on its own:
 
 ```bash
 curl -fsSLO https://github.com/achiliies/awg-panel/releases/latest/download/awg-panel.sh
 sudo bash awg-panel.sh
 ```
 
-That is what the one-liner does, minus the checksum — which is the one thing worth putting back if
+That is what `get.sh` does, minus the checksum — which is the one thing worth putting back if
 you go this way, and [Verifying what you downloaded](#verifying-what-you-downloaded) is how. The
 installer has to become a file either way: it reads the archive it carries out of its own tail
 rather than holding it in memory, so it cannot be piped into `bash` itself. `get.sh` is the small
@@ -291,7 +309,7 @@ silence:
 | `--lang CODE` | asked, then `en` | `en` or `ru`: what the installer prints in |
 | `--no-ask` | asks | take every default instead of being asked for it |
 
-`sudo bash awg-panel.sh --help` lists all of them, and so does
+`sudo bash awg-panel.sh --help` lists all of them, and so do `sudo bash get.sh --help` and
 `curl -fsSL .../get.sh | sudo bash -s -- --help`.
 
 ### Upgrading

@@ -351,6 +351,33 @@ ASK_FD=0
 if (( ASK )) && [[ -e /dev/tty ]] && (exec 3<>/dev/tty) 2>/dev/null; then
     exec 3<>/dev/tty
     ASK_FD=1
+    # Two signals, one cause. Reading this descriptor raises SIGTTIN, and
+    # changing the terminal's mode - ask_drain turns ICANON off for its -n, the
+    # password question turns echo off for its -s - is tcsetattr, which raises
+    # SIGTTOU. The kernel sends both to a process that is not the foreground
+    # process group of that terminal, and the default disposition of both is to
+    # stop it. Not kill, not fail: stop, with whatever it was about to print
+    # still unprinted.
+    #
+    # Which is exactly what `curl | sudo bash` does on Ubuntu 26.04. sudo is
+    # sudo-rs there, and with stdin a pipe it runs the command under a pty of
+    # its own; this shell lands outside that pty's foreground group for as long
+    # as it takes sudo-rs to hand it over, and ask_drain - the first thing the
+    # installer touches, three lines before its first output - falls into the
+    # window. The install stops dead with nothing on the terminal at all, no
+    # error and no prompt, and the operator has nothing to report but a hang.
+    # Ubuntu 24.04's sudo is the C one, which uses no pty for a piped stdin, so
+    # the same command is fine there and the bug looks like it is about AWS.
+    #
+    # Ignoring them is the fix rather than a way around it. POSIX has both
+    # calls stop signalling once the signal is ignored: tcsetattr then proceeds
+    # normally, and read fails with EIO instead. So the drain and the prompts
+    # do what they were written to do where the terminal is really ours, and
+    # report a terminal they cannot use where it is not - which is what the
+    # EIO branch at each of them is for. Neither default is wanted here anyway:
+    # job control is off in a non-interactive shell, and an installer that
+    # suspends itself over a terminal mode is never right.
+    trap '' TTOU TTIN
 fi
 ASK_TTY=$ASK_FD
 
@@ -1047,10 +1074,10 @@ ask_line() {
     ask_drain
     printf '\n       %s%s%s ' "$B" "$prompt" "$N" >&3
     if [[ -n "$secret" ]]; then
-        read -r -s -u 3 line || ASK_TTY=0
+        read -r -s -u 3 line 2>/dev/null || ASK_TTY=0
         printf '\n' >&3
     else
-        read -r -u 3 line || ASK_TTY=0
+        read -r -u 3 line 2>/dev/null || ASK_TTY=0
     fi
     REPLY_VAL="$line"
 }
