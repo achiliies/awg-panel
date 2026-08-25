@@ -27,7 +27,10 @@
 # .conf importer rejects the kernel's other tags (<t> <c> <rc> <rd>) with
 # error code 1000. HeaderProtectionKey and ContentPaddingAddition stay unset
 # for the same reason - the importer silently drops them, and a server that
-# expects them then fails every handshake with no error.
+# expects them then fails every handshake with no error. RandomTrailers, which
+# AmneziaWG 3.1 added, is left unset here on the same grounds: the installer
+# has no way to know what every client runs, and the panel is where it can be
+# switched on once they are known. Nothing below draws it.
 
 # shellcheck source=lib/i18n.sh
 . "$(dirname "${BASH_SOURCE[0]}")/i18n.sh"

@@ -738,7 +738,7 @@ body is optional, so `{}` still means what it always did:
 | Field     | Default        | Meaning                                                   |
 | --------- | -------------- | --------------------------------------------------------- |
 | `profile` | `"standard"`   | `standard`, `dpi`, `fast` or `random` — which band to draw from |
-| `scope`   | `"obfuscation"`| `obfuscation` for `Jc`…`I5`, `advanced` for the AmneziaWG 3.0 group |
+| `scope`   | `"obfuscation"`| `obfuscation` for `Jc`…`I5`, `advanced` for the AmneziaWG 3.0/3.1 group |
 
 Nothing here describes the form. An `mtu` and an `s4` were each accepted once so
 a preview could be drawn against a value the form held and the disk did not, and
@@ -809,9 +809,14 @@ waiting for the answer.
 ```
 
 Read those warnings. Every value in this scope needs AmneziaWG 3.0 at the far
-end; a parameter the installed module cannot do comes back empty with a sentence
-saying so, rather than producing a set that `PUT api/v1/server` would then
-reject.
+end (or 3.1 for `RandomTrailers`); a parameter the installed module cannot do
+comes back empty with a sentence saying so, rather than producing a set that
+`PUT api/v1/server` would then reject.
+
+`RandomTrailers` is the one setting in the advanced group that is a switch rather
+than a value, so there is nothing to copy between the two ends — but both ends
+still need it, and it does nothing to data packets while `ContentPaddingAddition`
+is set.
 
 `ContentPaddingAddition` comes back as a range rather than a number, and that is
 not cosmetic. The kernel uses it *instead of* the padding it does anyway — every
@@ -828,7 +833,7 @@ does not come up. `PUT api/v1/server` rejects that combination, reported against
 the key and each short field, and the preview says which fields will need
 raising before the drawn set can be saved.
 
-To turn the group off again, `PUT api/v1/server` with every one of those seven
+To turn the group off again, `PUT api/v1/server` with every one of those eight
 keys set to `""`. That removes the lines rather than blanking them.
 
 ### `POST api/v1/server/restart`
@@ -895,7 +900,8 @@ Idempotent: starting a tunnel that is already up answers `204`.
   "toolsVersion": "amneziawg-tools v3.1.20260812 - https://amnezia.org",
   "moduleVersion": "3.1.20260812",
   "features": { "headerRanges": true, "imitationPackets": true,
-                "headerProtectionKey": true, "contentPadding": true, "timers": true },
+                "headerProtectionKey": true, "contentPadding": true, "timers": true,
+                "randomTrailers": true },
   "serviceActive": "active",
   "serviceEnabled": "enabled",
   "listening": true,

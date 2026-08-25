@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { paramText } from "@/lib/paramText";
 import { cn } from "@/lib/utils";
 import type { ParamSpec } from "@/api/types";
@@ -56,6 +57,9 @@ const MONO_KINDS: ReadonlySet<string> = new Set(["imitation", "key"]);
 /** Kinds that are whole numbers, so the browser can offer a numeric keyboard. */
 const NUMERIC_KINDS: ReadonlySet<string> = new Set(["int", "port"]);
 
+/** Kinds rendered as a switch rather than a text input. */
+const BOOL_KINDS: ReadonlySet<string> = new Set(["bool"]);
+
 export interface ParamFieldProps {
   spec: ParamSpec;
   /** Current value as it would be written to the config; "" means unset. */
@@ -91,6 +95,7 @@ export function ParamField({
   const locked = disabled || unsupported;
   const numeric = NUMERIC_KINDS.has(spec.kind);
   const wide = WIDE_KINDS.has(spec.kind);
+  const bool = BOOL_KINDS.has(spec.kind);
 
   const describedBy = [helpId, error ? errorId : null].filter(Boolean).join(" ");
 
@@ -149,27 +154,43 @@ export function ParamField({
         <ParamBadges spec={spec} />
       </div>
 
-      <Input
-        id={id}
-        value={value}
-        onChange={(event) => onChange(spec.key, event.target.value)}
-        disabled={locked}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy || undefined}
-        // The catalog carries the bounds, so the browser enforces exactly the
-        // same numbers the server does.
-        type={numeric ? "number" : "text"}
-        inputMode={numeric ? "numeric" : undefined}
-        min={numeric && spec.min !== null ? spec.min : undefined}
-        max={numeric && spec.max !== null ? spec.max : undefined}
-        step={numeric ? 1 : undefined}
-        placeholder={spec.default ?? undefined}
-        spellCheck={MONO_KINDS.has(spec.kind) ? false : undefined}
-        autoComplete="off"
-        autoCorrect="off"
-        autoCapitalize="off"
-        className={cn(MONO_KINDS.has(spec.kind) && "font-mono text-xs")}
-      />
+      {bool ? (
+        <div className="flex h-9 items-center gap-2">
+          <Switch
+            id={id}
+            checked={value === "on"}
+            onCheckedChange={(checked) => onChange(spec.key, checked ? "on" : "")}
+            disabled={locked}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={describedBy || undefined}
+          />
+          <span className="text-xs text-muted-foreground">
+            {value === "on" ? t("common.on") : t("common.off")}
+          </span>
+        </div>
+      ) : (
+        <Input
+          id={id}
+          value={value}
+          onChange={(event) => onChange(spec.key, event.target.value)}
+          disabled={locked}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy || undefined}
+          // The catalog carries the bounds, so the browser enforces exactly the
+          // same numbers the server does.
+          type={numeric ? "number" : "text"}
+          inputMode={numeric ? "numeric" : undefined}
+          min={numeric && spec.min !== null ? spec.min : undefined}
+          max={numeric && spec.max !== null ? spec.max : undefined}
+          step={numeric ? 1 : undefined}
+          placeholder={spec.default ?? undefined}
+          spellCheck={MONO_KINDS.has(spec.kind) ? false : undefined}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          className={cn(MONO_KINDS.has(spec.kind) && "font-mono text-xs")}
+        />
+      )}
 
       <p id={helpId} className="text-xs leading-relaxed text-muted-foreground">
         {text.helpShort}

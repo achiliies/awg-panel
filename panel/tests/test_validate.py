@@ -23,6 +23,7 @@ ALL_FEATURES = {
     "header_protection_key": True,
     "content_padding": True,
     "timers": True,
+    "random_trailers": True,
 }
 
 # A well-formed 32-byte base64 key. Not a real one and never used to connect.
@@ -772,7 +773,17 @@ def test_every_param_is_explained(key):
         "advanced",
         "hooks",
     }, key
-    assert spec.kind in {"int", "range", "imitation", "key", "text", "cidr", "port", "iplist"}, key
+    assert spec.kind in {
+        "int",
+        "range",
+        "imitation",
+        "key",
+        "text",
+        "cidr",
+        "port",
+        "iplist",
+        "bool",
+    }, key
 
 
 def test_catalog_covers_every_mirrored_parameter():
@@ -803,9 +814,59 @@ def test_importer_unsafe_params_are_exactly_the_documented_ones():
         "RejectAfterTime",
         "KeepaliveTimeout",
         "MaxHandshakeAttempts",
+        "RandomTrailers",
     }
 
 
 def test_unknown_keys_are_ignored():
     """Callers hand over a whole parsed [Interface]; PrivateKey is not ours to check."""
     assert check({"PrivateKey": "whatever", "Table": "off"}) == {}
+
+
+# --------------------------------------------------------- random trailers
+
+
+def test_random_trailers_accepts_on():
+    """AmneziaWG 3.1 appends a random-length trailer to every packet when enabled."""
+    assert check({"RandomTrailers": "on"}) == {}
+
+
+@pytest.mark.parametrize("value", ["off", "", "OFF", "0"])
+def test_random_trailers_off_and_empty_read_as_unset(value):
+    """Off or omitted means no random trailer padding is configured, so no line
+    is emitted and no importer warning is raised."""
+    assert validate._is_set(validate.PARAMS["RandomTrailers"], value) is False
+    assert check({"RandomTrailers": value}) == {}
+    assert not [
+        text
+        for text in validate.warnings_for({"RandomTrailers": value})
+        if "RandomTrailers" in text
+    ]
+
+
+@pytest.mark.parametrize("value", ["yes", "true", "1", "invalid", "enabled"])
+def test_random_trailers_rejects_unrecognized_values(value):
+    """awg setconf only understands on/off; anything else in the config would cause
+    the interface bring-up to fail."""
+    errors = check({"RandomTrailers": value})
+    assert "RandomTrailers" in errors
+    assert "Use on or off" in errors["RandomTrailers"]
+
+
+def test_random_trailers_warns_about_the_app_importer_when_set():
+    """RandomTrailers arrived in 3.1 and the Amnezia app importer discards it silently,
+    so an app user fails to connect without any error message."""
+    warnings = validate.warnings_for({"RandomTrailers": "on"})
+    matching = [text for text in warnings if "RandomTrailers" in text]
+    assert matching, warnings
+    assert "Amnezia app" in matching[0]
+
+
+def test_random_trailers_requires_module_feature_support():
+    """On a kernel module without random trailer support, enabling the setting would
+    be ignored and clients expecting trailers would fail to handshake."""
+    assert check({"RandomTrailers": "on"}, {**ALL_FEATURES, "random_trailers": True}) == {}
+    errors = check({"RandomTrailers": "on"}, {**ALL_FEATURES, "random_trailers": False})
+    assert "RandomTrailers" in errors
+    assert "random packet trailers" in errors["RandomTrailers"]
+

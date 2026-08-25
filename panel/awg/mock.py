@@ -252,6 +252,7 @@ class MockController:
             "header_protection_key": True,
             "content_padding": True,
             "timers": True,
+            "random_trailers": True,
             "unknown": [],
         }
 

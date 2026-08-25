@@ -918,6 +918,7 @@ CATALOG: tuple[Op, ...] = (
                 "headerProtectionKey": True,
                 "contentPadding": True,
                 "timers": True,
+                "randomTrailers": True,
             },
             "serviceActive": "active",
             "serviceEnabled": "enabled",

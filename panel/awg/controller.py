@@ -78,6 +78,7 @@ _PROBE_TOKENS: dict[str, tuple[str, ...]] = {
     "header_protection_key": ("hpk", "header-protection-key", "headerprotectionkey"),
     "content_padding": ("cpa", "content-padding", "contentpaddingaddition"),
     "timers": ("rekey-after-time", "rekeyaftertime", "reject-after-time", "rejectaftertime"),
+    "random_trailers": ("random-trailers", "randomtrailers"),
 }
 
 # Imitation packets and header ranges landed together upstream; anything at or
@@ -511,6 +512,7 @@ class AwgController:
             "header_protection_key": caps["header_protection_key"],
             "content_padding": caps["content_padding"],
             "timers": caps["timers"],
+            "random_trailers": caps["random_trailers"],
             "unknown": sorted(set(unknown)),
         }
 

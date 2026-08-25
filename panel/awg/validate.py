@@ -7,7 +7,7 @@ too. The UI reads `param_list()` over the API and renders `label`, `help_short`
 under the field and `help_long` in the info popover, so every word here is
 user-visible copy, not a code comment.
 
-The target is AmneziaWG 3.0, the line install.sh pins. That differs from older
+The target is AmneziaWG 3.1, the line install.sh pins. That differs from older
 write-ups in two ways that matter:
 
 * H1-H4 take a range `lo-hi` as well as a single number. Given a range the
@@ -23,7 +23,7 @@ want a re-issue, but that is the store's call, not a property of the protocol.
 
 `importer_safe` is the hard-won part, and it is False for exactly the settings
 AmneziaWG 3.0 added: HeaderProtectionKey, ContentPaddingAddition and the timer
-overrides.
+overrides - and for RandomTrailers, which 3.1 added on the same terms.
 Two things have to be true before one of them is worth setting, and neither is
 visible from the server. The peer has to speak 3.0 at all - most clients do not
 yet, so these are a beta feature from the operator's side whatever the server
@@ -115,6 +115,7 @@ AWG_PARAMS: tuple[str, ...] = (
     "RejectAfterTime",
     "KeepaliveTimeout",
     "MaxHandshakeAttempts",
+    "RandomTrailers",
 )
 
 NETWORK_PARAMS: tuple[str, ...] = (
@@ -852,6 +853,31 @@ _SPECS: list[ParamSpec] = [
         recommended="18",
     ),
     ParamSpec(
+        key="RandomTrailers",
+        group="advanced",
+        label="Random packet trailers",
+        kind="bool",
+        help_short="Pads every packet to a random length. Needs AmneziaWG 3.1 on every client.",
+        help_long=(
+            "The length of an AmneziaWG packet follows from what is inside it, and a handshake "
+            "is the same length every time - which is a pattern to match on even when every "
+            "byte in it is random. With this on, the module appends a trailer of random length "
+            "to each packet it sends, handshakes and data alike, drawn against what the path "
+            "has already carried so the padding never pushes a packet over the MTU. It is the "
+            "one setting on this card with nothing to copy: there is no value to agree on, "
+            "only on or off. "
+            "It arrived in AmneziaWG 3.1 and both ends still have to have it. A peer without "
+            "it measures an arriving handshake, finds it longer than the one it expects and "
+            "drops it, with no error at either end; the Amnezia app's .conf importer discards "
+            "the line, so a client imported that way is a client without it. "
+            "It also does nothing to data packets while ContentPaddingAddition is set - that "
+            "one already decides their padding, and the two do not stack."
+        ),
+        must_match_client=True,
+        importer_safe=False,
+        recommended="on, once every peer is known to run AmneziaWG 3.1",
+    ),
+    ParamSpec(
         key="ListenPort",
         group="network",
         label="UDP listen port",
@@ -1100,6 +1126,7 @@ FEATURE_OF: dict[str, str] = {
     "RejectAfterTime": "timers",
     "KeepaliveTimeout": "timers",
     "MaxHandshakeAttempts": "timers",
+    "RandomTrailers": "random_trailers",
 }
 
 _FEATURE_LABEL: dict[str, str] = {
@@ -1108,6 +1135,7 @@ _FEATURE_LABEL: dict[str, str] = {
     "content_padding": "content padding",
     "timers": "timer overrides",
     "header_ranges": "header ranges",
+    "random_trailers": "random packet trailers",
 }
 
 _INT_RE = re.compile(r"^-?\d+$")
@@ -1194,11 +1222,12 @@ def warnings_for(values: dict[str, str]) -> list[str]:
     ]
     if unsafe:
         out.append(
-            f"{', '.join(unsafe)}: these were added in AmneziaWG 3.0 and need 3.0 at both ends. "
-            "A peer still on 2.x ignores them, and so does one that imported a .conf through the "
-            "Amnezia app, which discards these lines without saying so. Either way that client "
-            "negotiates without them, is rejected by the server, and shows no error at all. "
-            "Clear them, or make sure every peer runs 3.0 and is configured by hand."
+            f"{', '.join(unsafe)}: these arrived with AmneziaWG 3.0 and 3.1, and each needs the "
+            "version that added it at both ends. A peer on an older release ignores them, and so "
+            "does one that imported a .conf through the Amnezia app, which discards these lines "
+            "without saying so. Either way that client negotiates without them, is rejected by "
+            "the server, and shows no error at all. Clear them, or make sure every peer is new "
+            "enough and is configured by hand."
         )
 
     hostile: list[str] = []
@@ -1346,6 +1375,12 @@ def randomize_advanced(
     what its own MTU leaves, so unlike S4 this one can never push a full-size
     packet over the path.
 
+    RandomTrailers comes back on. It is the one member of the group with
+    nothing to draw - there is no value, only a switch - and leaving it off
+    would make "fill in the advanced settings" quietly produce a group with a
+    hole in it. Every other setting here already costs a peer that is too old
+    its connection, which is what the confirmation in front of this asks about.
+
     What this does not do is decide whether the group should be set at all.
     Every one of these needs AmneziaWG 3.0 on the far end, and the caller is
     what knows whether the installed module even supports them.
@@ -1375,6 +1410,7 @@ def randomize_advanced(
         "RejectAfterTime": str(reject_after),
         "KeepaliveTimeout": str(keepalive),
         "MaxHandshakeAttempts": str(rng.randint(*band.attempts)),
+        "RandomTrailers": "on",
     }
 
 
@@ -1697,11 +1733,13 @@ def _is_set(spec: ParamSpec, value: str) -> bool:
 
     A parameter whose value is empty or exactly "0" is not written out at all,
     so for the obfuscation groups those both mean "off" and skip range checks.
+    A switch says it in words rather than in a number, and "off" is the same
+    answer: nothing to write, nothing to check, nothing to warn about.
     """
     text = value.strip()
     if not text:
         return False
-    return not (spec.group in _OFF_MEANS_UNSET and text == "0")
+    return not (spec.group in _OFF_MEANS_UNSET and text.lower() in ("0", "off"))
 
 
 def _get(values: dict[str, str], key: str) -> str:
@@ -1754,7 +1792,22 @@ def _check_value(spec: ParamSpec, value: str) -> str | None:
         return _check_iplist(spec, value)
     if spec.kind == "text":
         return _check_text(spec, value)
+    if spec.kind == "bool":
+        return _check_bool(value)
     return None
+
+
+def _check_bool(value: str) -> str | None:
+    """The two words `awg setconf` parses for a switch.
+
+    "off" only reaches here from a config somebody wrote by hand: _is_set reads
+    it as unset, so the panel's own off is an empty value and no line at all.
+    Accepted anyway, because refusing what the tool accepts would turn a working
+    config into a settings page that cannot be saved.
+    """
+    if value.strip().lower() in ("on", "off"):
+        return None
+    return "Use on or off, or leave it empty to leave the line out of the config."
 
 
 def _check_int(spec: ParamSpec, value: str) -> str | None:

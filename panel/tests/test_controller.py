@@ -254,6 +254,7 @@ def test_features_without_awg_are_permissive_and_flagged_unknown(no_awg):
         "header_protection_key",
         "content_padding",
         "timers",
+        "random_trailers",
     ):
         assert features[name] is True, name
     assert set(features["unknown"]) == {
@@ -262,6 +263,7 @@ def test_features_without_awg_are_permissive_and_flagged_unknown(no_awg):
         "header_protection_key",
         "content_padding",
         "timers",
+        "random_trailers",
     }
 
 
@@ -476,6 +478,7 @@ def test_mock_reports_a_complete_feature_set(server_conf):
         "header_protection_key",
         "content_padding",
         "timers",
+        "random_trailers",
     ):
         assert features[name] is True, name
     assert features["tools_version"] and features["module_version"]

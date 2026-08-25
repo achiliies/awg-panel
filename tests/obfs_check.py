@@ -22,6 +22,7 @@ FEATURES = {
     "header_protection_key": True,
     "content_padding": True,
     "timers": True,
+    "random_trailers": True,
 }
 
 TAG = re.compile(r"<\s*(r|b)\s*([^>]*?)\s*>")

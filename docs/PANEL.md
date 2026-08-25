@@ -453,7 +453,7 @@ discarded.
 | Changed | How it is applied | Sessions drop | Clients re-import |
 |---|---|---|---|
 | `DNS`, endpoint, default `AllowedIPs`, keepalive | client configs are regenerated; the server is not touched | no | yes |
-| any obfuscation parameter (`Jc`, `S1`–`S4`, `H1`–`H4`, `I1`–`I5`, …) | `awg-quick down` + `up` | yes, a second or two | yes |
+| any obfuscation parameter (`Jc`, `S1`–`S4`, `H1`–`H4`, `I1`–`I5`, `RandomTrailers`, …) | `awg-quick down` + `up` | yes, a second or two | yes |
 | `ListenPort`, `Address`, `MTU` | `awg-quick down` + `up` | yes, a second or two | port and address: yes |
 | adding, removing, enabling or disabling a client | `awg syncconf`, live | no | no |
 | a client's own routes or DNS | its config file is rewritten, live | no | that client |
@@ -692,10 +692,14 @@ The network and advanced groups are not part of this and do have fixed values:
 | `RekeyAfterTime`, `RekeyTimeout` | advanced | 120, 5 — left empty |
 | `RejectAfterTime`, `KeepaliveTimeout` | advanced | 180, 10 — left empty |
 | `MaxHandshakeAttempts` | advanced | 18 — left empty |
+| `RandomTrailers` | advanced | off — left empty |
 
 The rules behind the bands, in short: `Jmin` < `Jmax`; `S1 + 56 ≠ S2`, or the
 two handshake packets come out the same size and become a recognisable pair;
-`H1`–`H4` must be distinct and their ranges must not overlap.
+`H1`–`H4` must be distinct and their ranges must not overlap. `RandomTrailers`
+is a switch rather than a value, so there is nothing to copy between the two
+ends — but both ends still need it, and it does nothing to data packets while
+`ContentPaddingAddition` is set.
 
 ### The per-packet budget
 
@@ -729,25 +733,26 @@ room, the field comes back at `0` or empty with a sentence saying which setting
 took the space, rather than a value the save would then reject.
 
 The advanced group is left empty on a fresh install, on purpose. Those settings
-were added in AmneziaWG 3.0 and the values shown are the ones the protocol
-already uses, so writing them changes nothing; setting them to anything else
-breaks every peer that does not speak 3.0 — which is still most of them — along
-with every peer that imported a `.conf` through the Amnezia app, whose importer
-discards the lines without a word. The panel badges the whole group as a beta
-feature for that reason.
+were added in AmneziaWG 3.0 (and 3.1 for `RandomTrailers`) and the values shown
+are the ones the protocol already uses, so writing them changes nothing; setting
+them to anything else breaks every peer that does not speak that version — which
+is still most of them — along with every peer that imported a `.conf` through
+the Amnezia app, whose importer discards the lines without a word. The panel
+badges the whole group as a beta feature for that reason.
 
-### Filling in the AmneziaWG 3.0 group
+### Filling in the advanced group
 
 Empty is the right default and a poor place to be stuck. Once every peer really
-is on 3.0, the group is the strongest thing this server offers, and it used to
-be seven empty boxes an admin was expected to fill in from the protocol
-specification — which is the same mistake a fixed obfuscation profile would be.
-A value everybody copies out of one document is a constant, not a setting, and
-the timers say precisely how often this server handshakes.
+is on 3.0 (or 3.1 for `RandomTrailers`), the group is the strongest thing this
+server offers, and it used to be eight empty boxes an admin was expected to fill
+in from the protocol specification — which is the same mistake a fixed
+obfuscation profile would be. A value everybody copies out of one document is a
+constant, not a setting, and the timers say precisely how often this server
+handshakes.
 
 So the card has *Generate*, which takes the same four profiles and draws the
-whole group as one consistent set: a fresh 32-byte header protection key, and
-timers that interlock. `RejectAfterTime` is derived rather than drawn, because
+whole group as one consistent set: a fresh 32-byte header protection key,
+random trailers switched on, and timers that interlock. `RejectAfterTime` is derived rather than drawn, because
 it has to outlast a whole rekey cycle rather than the longest single timer in
 it — a peer starts a handshake at `RekeyAfterTime` and may then spend
 `KeepaliveTimeout` + `RekeyTimeout` waiting for the answer, so the three add up.
@@ -766,6 +771,13 @@ that rounding buys it back, and the generator will not draw one that does not.
 Anything the installed module cannot do is left empty instead: it would be an
 error at save time, not a silent drop.
 
+`RandomTrailers` is the one setting on this card with nothing to copy: there is
+no value to agree on, only on or off. It arrived in AmneziaWG 3.1 and both ends
+still have to have it — a peer without it measures an arriving handshake, finds
+it longer than expected, and drops it with no error at either end. It also does
+nothing to data packets while `ContentPaddingAddition` is set: that one already
+decides their padding, and the two do not stack.
+
 The key the button draws also puts a floor under `S1`–`S4`, which live on the
 card above it. The nonce header protection is applied with is read off the front
 of the padding on each packet, so all four have to be at least 12 bytes or the
@@ -775,9 +787,9 @@ combination that will not bring it back. Every profile draws at or above that
 floor, the save refuses a set that is under it, and a config installed before the
 floor existed gets a sentence in the preview naming the fields to redraw.
 
-Beside it is *Clear*, which empties all seven at once. That is the way back, and
+Beside it is *Clear*, which empties all eight at once. That is the way back, and
 doing it one field at a time is how an admin ends up with a half-set group that
-breaks 2.x clients for no benefit at all. An empty value removes the line rather
+breaks older clients for no benefit at all. An empty value removes the line rather
 than blanking it, the same way an unused imitation slot does.
 
 ### Why the bands stop where they do
@@ -2129,16 +2141,19 @@ the kernel is really holding, and one class per limited client is what it should
 show.
 
 **A client stopped connecting after a config change.** Obfuscation parameters
-must match on both ends. Changing `S1`-`S4`, `H1`-`H4` or `I1`-`I5` requires
-every device to re-import; the panel says so and offers an "Export all configs"
-link, and the shell equivalent is `sudo awg-panel manage resync`.
+must match on both ends. Changing `S1`-`S4`, `H1`-`H4`, `I1`-`I5` or
+`RandomTrailers` requires every device to re-import; the panel says so and
+offers an "Export all configs" link, and the shell equivalent is
+`sudo awg-panel manage resync`.
 
 **A client config works on a desktop client but not in the app.** Check whether the config
-carries `HeaderProtectionKey`, `ContentPaddingAddition` or a timer override.
-Those are AmneziaWG 3.0 settings: a client below 3.0 ignores them, and the
-Amnezia app's `.conf` importer drops the lines silently even where the client
-would understand them. `HeaderProtectionKey` is the one that fails outright — a
-client that never received it cannot read a protected header, so the handshake
-fails with no error at either end. The padding and the timers leave a working
-tunnel with one end doing less than the operator thinks. The panel badges them
-all "Needs AmneziaWG 3.0" for exactly this reason.
+carries `HeaderProtectionKey`, `ContentPaddingAddition`, a timer override or
+`RandomTrailers`. Those are AmneziaWG 3.0 and 3.1 settings: a client below
+those versions ignores them, and the Amnezia app's `.conf` importer drops the
+lines silently even where the client would understand them.
+`HeaderProtectionKey` and `RandomTrailers` are the ones that fail outright — a
+client that never received the key cannot read a protected header, and one
+without random trailers drops a handshake packet it finds longer than expected,
+so the handshake fails with no error at either end. The padding and the timers
+leave a working tunnel with one end doing less than the operator thinks. The
+panel badges them all "Needs AmneziaWG 3.0+" for exactly this reason.

@@ -699,7 +699,8 @@ export interface ServerStatus {
 export type ParamGroup =
   "network" | "junk" | "sizes" | "headers" | "imitation" | "advanced" | "hooks";
 
-export type ParamKind = "int" | "range" | "imitation" | "key" | "text" | "cidr" | "port" | "iplist";
+export type ParamKind =
+  "int" | "range" | "imitation" | "key" | "text" | "cidr" | "port" | "iplist" | "bool";
 
 /**
  * One row of GET server/params: the single source of truth for both the
