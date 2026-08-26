@@ -442,6 +442,7 @@ awg_supports() {
 # only case that reaches it is an MTU high enough to leave S4 no room - which
 # --mtu allows and the panel does not.
 gen_advanced() {
+    local MARGIN
     HPK=""; CPA=""
     REKEY_AFTER=""; REKEY_TIMEOUT=""; REJECT_AFTER=""
     KEEPALIVE_TIMEOUT=""; MAX_ATTEMPTS=""
@@ -483,8 +484,15 @@ gen_advanced() {
         # measures its own key against, and a responder that reaches the
         # threshold first starts handshaking on top of the initiator - which
         # doubles the one event on the wire none of this can disguise.
-        REJECT_AFTER=$(( REKEY_AFTER + KEEPALIVE_TIMEOUT + REKEY_TIMEOUT                          + $(rand_int "$OBFS_MARGIN_LO" "$OBFS_MARGIN_HI") ))
-        (( REJECT_AFTER > OBFS_REJECT_MAX )) && REJECT_AFTER=$OBFS_REJECT_MAX
+        #
+        # The ceiling is folded into the same expression rather than tested
+        # after it. A bare `(( ... )) && var=...` on the last line of a function
+        # hands back the status of the test, and this one is false for every
+        # draw the bands can produce - so the function returned 1, and the
+        # installer runs under `set -e`.
+        MARGIN=$(rand_int "$OBFS_MARGIN_LO" "$OBFS_MARGIN_HI")
+        REJECT_AFTER=$(( REKEY_AFTER + KEEPALIVE_TIMEOUT + REKEY_TIMEOUT + MARGIN ))
+        REJECT_AFTER=$(( REJECT_AFTER > OBFS_REJECT_MAX ? OBFS_REJECT_MAX : REJECT_AFTER ))
     fi
 }
 

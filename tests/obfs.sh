@@ -86,4 +86,19 @@ for mtu in 1429 1500 9000; do
 done
 (( RC == 0 )) && echo "  ok    no key drawn at MTU 1429, 1500 or 9000; timers still drawn"
 
+# What the generator returns, which nothing above this can see: this file runs
+# without `set -e` so that a failed check can be counted and reported rather
+# than ending the run, and install.sh runs with it. A generator whose last
+# statement is a test - `(( ceiling )) && var=...`, with a ceiling no draw
+# reaches - hands that test's status back as its own, and the installer then
+# exits 1 in the middle of the step with nothing printed. So the status is
+# asserted here the way install.sh consumes it, in a shell that has -e set.
+echo "  exit status under set -e"
+if bash -c "set -euo pipefail; . '$REPO/lib/obfs.sh'; gen_obfuscation 1400" >/dev/null 2>&1; then
+    echo "  ok    gen_obfuscation returns 0, so install.sh gets past the step"
+else
+    echo "  FAIL  gen_obfuscation returned non-zero; install.sh would exit here"
+    RC=1
+fi
+
 exit "$RC"
