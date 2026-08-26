@@ -763,9 +763,22 @@ export MAKEFLAGS="-j${JOBS}"
 # WIREGUARD_VERSION, and gets the header's value. Without this line the module
 # built here and the module dkms installs would report different versions, and
 # the one everybody looks at would be the second.
-make -j"$JOBS" WIREGUARD_VERSION="$MODVER" >/dev/null 2>&1 \
-    || { make WIREGUARD_VERSION="$MODVER"; die "$(t "module build failed" \
-                                                   "сборка модуля не удалась")"; }
+#
+# Passed only when there is one to pass, and guarded the way the dkms block
+# below guards the same string. An unreadable version.h leaves MODVER empty,
+# and `WIREGUARD_VERSION=` on the command line is an override to the empty
+# string rather than no override at all: the module would report no version at
+# all, while dkms - which falls back to upstream's own value - would still
+# register 1.0.0. That is the disagreement the paragraph above exists to
+# prevent, arrived at from the other side. Passing nothing leaves version.h's
+# #ifndef to answer, which is what dkms gets anyway.
+MODMAKE=()
+if [[ "$MODVER" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+    MODMAKE=(WIREGUARD_VERSION="$MODVER")
+fi
+make -j"$JOBS" "${MODMAKE[@]}" >/dev/null 2>&1 \
+    || { make "${MODMAKE[@]}"; die "$(t "module build failed" \
+                                        "сборка модуля не удалась")"; }
 echo "$(t "  compiled" "  скомпилировано")"
 
 # DKMS so the module survives kernel upgrades instead of vanishing.
