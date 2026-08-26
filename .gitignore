@@ -1,4 +1,4 @@
 dist/
 vendor/
 .agents/
-AGENTS.md
+/AGENTS.md
