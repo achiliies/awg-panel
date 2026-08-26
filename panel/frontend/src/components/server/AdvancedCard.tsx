@@ -32,14 +32,14 @@ import type { ObfuscationProfile, ParamPreviewResult, ParamSpec } from "@/api/ty
  * what the badge and the note are for, and why the card starts closed.
  *
  * It had no generator until now, which left the strongest settings the server
- * offers as seven empty boxes to be filled in from the protocol specification.
+ * offers as eight empty boxes to be filled in from the protocol specification.
  * That is the same mistake a fixed obfuscation profile would be: a value
  * everybody copies out of one document is a constant, not a setting, and the
  * timers say precisely how often this server handshakes. So the group is drawn
  * as one consistent set - the timers interlock, and a header protection key is
  * only worth anything if it was never anybody else's.
  *
- * Beside it is the way back. Turning the group off means clearing all seven,
+ * Beside it is the way back. Turning the group off means clearing all eight,
  * and doing that one field at a time is how an admin ends up with a half-set
  * group that breaks 2.x clients for no benefit at all.
  */

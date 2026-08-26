@@ -790,7 +790,7 @@ packet larger however wide the range is.
 Every draw also stays at or above 12 bytes on `S1`–`S4`, which is what a header
 protection key needs (see below).
 
-With `"scope": "advanced"` the response carries the seven AmneziaWG 3.0
+With `"scope": "advanced"` the response carries the eight AmneziaWG 3.0 and 3.1
 settings instead, drawn as one consistent set — `RejectAfterTime` is derived
 rather than drawn, because it has to outlast a whole rekey cycle:
 `RekeyAfterTime` plus the `KeepaliveTimeout` + `RekeyTimeout` a peer may spend
@@ -802,9 +802,10 @@ waiting for the answer.
     "HeaderProtectionKey": "xYbOANvXjB9HdbfeC92cefXNNd8U2iIXtvmnHMogkCs=",
     "ContentPaddingAddition": "12-64",
     "RekeyAfterTime": "163", "RekeyTimeout": "7", "RejectAfterTime": "293",
-    "KeepaliveTimeout": "11", "MaxHandshakeAttempts": "24"
+    "KeepaliveTimeout": "11", "MaxHandshakeAttempts": "24",
+    "RandomTrailers": "on"
   },
-  "warnings": ["HeaderProtectionKey, ContentPaddingAddition, …: these were added in AmneziaWG 3.0 …"]
+  "warnings": ["HeaderProtectionKey, ContentPaddingAddition, …: these arrived with AmneziaWG 3.0 and 3.1 …"]
 }
 ```
 

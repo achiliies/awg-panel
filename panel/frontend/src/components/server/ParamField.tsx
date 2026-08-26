@@ -36,7 +36,7 @@ import type { ParamSpec } from "@/api/types";
  *                 setting is not broken, it is early: the same value works
  *                 perfectly once the clients catch up. The chip is outlined
  *                 rather than filled, because every field in the AmneziaWG 3.0
- *                 group carries it - seven solid amber chips down one card
+ *                 group carries it - eight solid amber chips down one card
  *                 shout at an admin who has already read the first one, and
  *                 they drown out the beta chip on the heading, which is the
  *                 one thing there saying it about the group as a whole;
