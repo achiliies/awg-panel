@@ -230,9 +230,15 @@ def check_advanced_bands(number: int, values: dict[str, str]) -> None:
                     f"content padding top {high} is under the {validate.PADDING_MULTIPLE}-byte rounding it replaces",
                 )
 
+    # Base64 and nothing else. validate accepts 64 hex characters as well,
+    # because a key can be typed into the panel, but a key in a .conf file goes
+    # through config.c's parse_key, which is key_from_base64 alone - the tools
+    # carry a key_from_hex and use it only on the UAPI socket. A hex key in
+    # awg0.conf is "Key is not the correct length or format" followed by
+    # `awg setconf` refusing the whole file, so the installer has one spelling.
     key = values.get("HeaderProtectionKey", "")
-    if key and not validate._HEX_KEY_RE.match(key) and not validate._B64_KEY_RE.match(key):
-        fail(number, "the header protection key is in neither spelling the parser takes")
+    if key and not validate._B64_KEY_RE.match(key):
+        fail(number, f"the header protection key is not the base64 `awg setconf` reads: {key!r}")
 
     packets = [values[f"I{n}"] for n in range(1, 6) if values.get(f"I{n}")]
     if not 3 <= len(packets) <= 5:

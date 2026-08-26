@@ -3,9 +3,8 @@
 # install.sh
 #
 # One-shot installer: builds AmneziaWG from source (kernel module, not the
-# userspace Go implementation), configures a server with a DPI-evasion
-# profile that the Amnezia client app can actually import, and installs the
-# web panel that manages it.
+# userspace Go implementation), configures a server with a DPI-evasion profile
+# drawn for that machine alone, and installs the web panel that manages it.
 #
 # Usage:  sudo ./install.sh [options]
 #   --port N        listen port          (default: random 20000-59999)
@@ -174,8 +173,8 @@ install.sh - build and configure an AmneziaWG server from source
 
   Builds the kernel module (fast path, not the userspace Go version),
   registers it with DKMS, builds awg/awg-quick, writes a server config with
-  a DPI-evasion profile the Amnezia client app can actually import, installs
-  the web panel that manages the clients, and creates a first one.
+  a DPI-evasion profile drawn for that machine alone, installs the web panel
+  that manages the clients, and creates a first one.
 
 Options:
   --port N        listen port          (default: random 20000-59999)
@@ -1806,12 +1805,24 @@ echo "$(t "  decoys: ${GEN_DESC}" "  имитация протокола: ${GEN_
 # take whatever they do not understand. Neither is an error, and both are
 # something the operator should be able to read off the install rather than
 # discover on the Obfuscation page a month later.
+#
+# Two ways to end up without a key, and they are not the same advice: an MTU is
+# something the operator chose and can lower, and a build too old for the
+# setting is something only an upgrade fixes. Asking awg_supports again is free
+# - lib/obfs.sh read the usage once and kept it.
 if [[ -n "$HPK" ]]; then
-    echo "$(t "  header protection on, content padding ${CPA:-off}, timers ${REKEY_AFTER}/${REJECT_AFTER}s" \
-              "  защита заголовка включена, набивка содержимого ${CPA:-выкл}, таймеры ${REKEY_AFTER}/${REJECT_AFTER} с")"
-else
+    echo "$(t "  header protection on, content padding ${CPA:-off}, timers ${REKEY_AFTER:-off}/${REJECT_AFTER:-off}s" \
+              "  защита заголовка включена, набивка содержимого ${CPA:-выкл}, таймеры ${REKEY_AFTER:-выкл}/${REJECT_AFTER:-выкл} с")"
+elif awg_supports header-protection-key; then
     echo "$(t "  header protection off: MTU ${MTU} leaves no padding for its nonce" \
               "  защита заголовка выключена: при MTU ${MTU} не остаётся набивки для одноразового номера")"
+else
+    echo "$(t "  header protection off: the installed AmneziaWG tools do not have it" \
+              "  защита заголовка выключена: установленные утилиты AmneziaWG её не поддерживают")"
+fi
+if [[ -z "$REKEY_AFTER" ]]; then
+    echo "$(t "  timers left at the protocol defaults: the installed AmneziaWG tools do not take them" \
+              "  таймеры оставлены протокольными: установленные утилиты AmneziaWG их не принимают")"
 fi
 echo "$(t "  random packet trailers left off - they need AmneziaWG 3.1 on every client" \
           "  случайные хвосты пакетов выключены — им нужен AmneziaWG 3.1 на каждом клиенте")"

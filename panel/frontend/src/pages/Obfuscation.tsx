@@ -89,13 +89,25 @@ export default function Obfuscation(): JSX.Element {
    * would then complain about - but a warning that did arrive is about the set
    * on screen and there is no second moment to read it in, so it takes the
    * toast's line rather than the reassuring sentence.
+   *
+   * All of them, not the first. One draw covers the whole page now, and a
+   * single press can drop more than one value for more than one reason: an MTU
+   * that leaves no room for S4, the header protection key that then has no
+   * nonce to be carried in, and a build without the AmneziaWG 3.0 features at
+   * all. Showing the first of those and discarding the rest leaves a field
+   * empty with nothing on screen having said why. More than one also means the
+   * toast waits to be dismissed rather than timing out, because there is more
+   * here than a glance reads.
    */
   const filled = React.useCallback(
     (preview: ParamPreviewResult) => {
       form.fill(preview.params);
+      const { warnings } = preview;
       toast({
         title: String(t("server.reconfigured")),
-        description: preview.warnings[0] ?? String(t("server.reconfiguredBody")),
+        description:
+          warnings.length > 0 ? warnings.join(" ") : String(t("server.reconfiguredBody")),
+        duration: warnings.length > 1 ? 0 : undefined,
       });
     },
     [form, t, toast],

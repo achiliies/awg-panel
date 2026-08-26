@@ -587,9 +587,14 @@ export function useServerParams(): UseQueryResult<ParamSpec[], ApiError> {
  * preview: nothing is written until the user saves the form, because applying
  * it costs every client a re-import.
  *
- * The warnings come back with it and are worth showing. For the obfuscation
- * scope they are usually empty by construction; for the advanced group they
- * are the point, because every value in it needs AmneziaWG 3.0+ at the far end.
+ * One draw covers the whole page, obfuscation and the AmneziaWG 3.0 group
+ * together, so there is no scope to pass and no half to draw on its own.
+ *
+ * The warnings come back with it and are worth showing. They are usually empty
+ * by construction - no profile is allowed to hand back a set the save bar would
+ * then complain about - but a build without the 3.0 features, or an MTU that
+ * leaves no room for S4, can drop more than one value in a single draw, and
+ * each one is a field the operator is looking at.
  */
 export function useReconfigureObfuscation(): UseMutationResult<
   ParamPreviewResult,

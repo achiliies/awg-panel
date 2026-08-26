@@ -121,6 +121,17 @@ OBFS_DOMAINS=(apple.com www.google.com cloudflare.com microsoft.com
 
 rand_hex() { od -An -tx1 -N"$1" /dev/urandom | tr -d ' \n'; }
 
+# A 32-byte key in the one spelling awg's .conf parser takes: 44 characters of
+# base64 ending in '='. config.c parses HeaderProtectionKey through parse_key,
+# which is key_from_base64 and nothing else - key_from_hex exists in the same
+# tools but is only ever used on the UAPI socket, never on a file. A hex key in
+# awg0.conf is "Key is not the correct length or format" and then a refusal of
+# the whole config, so this is not a spelling preference.
+#
+# base64(1) is coreutils, the same package as the od(1) rand_hex already needs,
+# so it is not a dependency this adds.
+rand_key() { head -c 32 /dev/urandom | base64; }
+
 # A uniform integer in [lo, hi]. Rejection sampling on a 64-bit draw, so no
 # modulo bias: a band of 297 values taken modulo 2^64 would otherwise favour
 # its first few by a hair, and doing it properly costs one loop that almost
@@ -399,7 +410,17 @@ _quic_short() {
 # different answer from an empty usage text.
 OBFS_AWG_USAGE=""
 
-# True when the installed tools name any of these tokens in that usage.
+# True when the installed tools name every one of these tokens in that usage.
+#
+# Every token, not any of them, and each call names the exact argument for each
+# line it is gating. The alternative spellings this used to hedge with were
+# guesses, and two of the four in the timer probe could never have matched
+# anything: upstream is inconsistent about the separator - `rekey-after-time`
+# and `header-protection-key` with hyphens, `reject_after_time`,
+# `keepalive_timeout` and `max_handshake_attempts` with underscores - so a
+# guessed spelling is not a safety net, it is a probe that passes on one token
+# and then writes five lines. The list is vendor/amneziawg-tools/src/set.c at
+# the commit this release pins.
 #
 # The tool's argument names are the config keys lowercased, so a hit is hard
 # evidence. A miss is evidence too, and is treated as one here: a line the tools
@@ -425,9 +446,9 @@ awg_supports() {
     fi
     [[ "$OBFS_AWG_USAGE" == "-" ]] && return 0
     for token in "$@"; do
-        [[ "$OBFS_AWG_USAGE" == *"$token"* ]] && return 0
+        [[ "$OBFS_AWG_USAGE" == *"$token"* ]] || return 1
     done
-    return 1
+    return 0
 }
 
 # The header protection key, the content padding and the timers, drawn as one
@@ -447,21 +468,19 @@ gen_advanced() {
     REKEY_AFTER=""; REKEY_TIMEOUT=""; REJECT_AFTER=""
     KEEPALIVE_TIMEOUT=""; MAX_ATTEMPTS=""
 
-    if awg_supports hpk header-protection-key headerprotectionkey; then
+    if awg_supports header-protection-key; then
         local size floor=1
         for size in "$S1" "$S2" "$S3" "$S4"; do
             (( size >= OBFS_HEADER_NONCE )) || floor=0
         done
-        # 64 hex characters, which the parser takes alongside the 44-character
-        # base64 spelling the panel writes. Hex because it comes straight out of
-        # /dev/urandom through the same helper as everything else here, with no
-        # base64 in the dependency list and no `awg genkey`, whose output is a
-        # curve25519 private key with three bits clamped - harmless for a
-        # symmetric key, and still three bits nobody has to give away.
-        (( floor )) && HPK=$(rand_hex 32)
+        # The same 44-character base64 the panel writes, because it is the only
+        # spelling `awg setconf` reads - see rand_key. Not `awg genkey`, whose
+        # output is a curve25519 private key with three bits clamped: harmless
+        # for a symmetric key, and still three bits nobody has to give away.
+        (( floor )) && HPK=$(rand_key)
     fi
 
-    if awg_supports cpa content-padding contentpaddingaddition; then
+    if awg_supports content-padding-addition; then
         # A range, never a number: this replaces the rounding the kernel does
         # anyway, so a constant addition trades a length known to within
         # OBFS_PADDING_MULTIPLE bytes for one that tracks the packet inside it
@@ -472,7 +491,11 @@ gen_advanced() {
         (( high >= OBFS_PADDING_MULTIPLE )) && CPA="$(rand_int 0 $(( high / 3 )))-${high}"
     fi
 
-    if awg_supports rekey-after-time rekeyaftertime reject-after-time rejectaftertime; then
+    # All five, because all five are written below. Asking about two of them
+    # and writing five is how a build that has some of the group gets a line it
+    # cannot parse, which `awg setconf` answers by refusing the whole file.
+    if awg_supports rekey-after-time rekey_timeout reject_after_time \
+                    keepalive_timeout max_handshake_attempts; then
         REKEY_AFTER=$(rand_int "$OBFS_REKEY_AFTER_LO" "$OBFS_REKEY_AFTER_HI")
         REKEY_TIMEOUT=$(rand_int "$OBFS_REKEY_TIMEOUT_LO" "$OBFS_REKEY_TIMEOUT_HI")
         KEEPALIVE_TIMEOUT=$(rand_int "$OBFS_KEEPALIVE_LO" "$OBFS_KEEPALIVE_HI")
