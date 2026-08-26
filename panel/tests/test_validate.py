@@ -831,7 +831,7 @@ def test_random_trailers_accepts_on():
     assert check({"RandomTrailers": "on"}) == {}
 
 
-@pytest.mark.parametrize("value", ["off", "", "OFF", "0"])
+@pytest.mark.parametrize("value", ["off", "", "OFF", " off "])
 def test_random_trailers_off_and_empty_read_as_unset(value):
     """Off or omitted means no random trailer padding is configured, so no line
     is emitted and no importer warning is raised."""
@@ -844,13 +844,34 @@ def test_random_trailers_off_and_empty_read_as_unset(value):
     ]
 
 
-@pytest.mark.parametrize("value", ["yes", "true", "1", "invalid", "enabled"])
+@pytest.mark.parametrize("value", ["yes", "true", "1", "0", "invalid", "enabled"])
 def test_random_trailers_rejects_unrecognized_values(value):
     """awg setconf only understands on/off; anything else in the config would cause
-    the interface bring-up to fail."""
+    the interface bring-up to fail.
+
+    "0" among them: parse_bool compares against on and off with strcasecmp and
+    takes nothing else, so a hand-written `RandomTrailers = 0` is a config the
+    tools refuse. Reading it as unset would leave the settings page with nothing
+    to say about a line that stops the interface coming up.
+    """
     errors = check({"RandomTrailers": value})
     assert "RandomTrailers" in errors
     assert "Use on or off" in errors["RandomTrailers"]
+
+
+@pytest.mark.parametrize("key", ["Jc", "S1", "H1", "I1", "HeaderProtectionKey", "RekeyAfterTime"])
+def test_off_is_only_unset_for_a_switch(key):
+    """The word "off" reads as unset for the one parameter that is a switch, and
+    as the malformed value it is for every other member of those groups.
+
+    The groups that treat "0" as unset hold numbers, ranges and keys as well as
+    the switch. Reading the word "off" as unset across all of them would let a
+    hand-written `Jc = off` past the settings page - the tools parse Jc with
+    parse_uint16 and refuse that config - leaving nothing to warn the admin
+    before the interface fails to come up.
+    """
+    assert validate._is_set(validate.PARAMS[key], "off") is True
+    assert key in check({key: "off"})
 
 
 def test_random_trailers_warns_about_the_app_importer_when_set():
@@ -869,4 +890,3 @@ def test_random_trailers_requires_module_feature_support():
     errors = check({"RandomTrailers": "on"}, {**ALL_FEATURES, "random_trailers": False})
     assert "RandomTrailers" in errors
     assert "random packet trailers" in errors["RandomTrailers"]
-

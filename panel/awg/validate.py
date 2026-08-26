@@ -1735,11 +1735,20 @@ def _is_set(spec: ParamSpec, value: str) -> bool:
     so for the obfuscation groups those both mean "off" and skip range checks.
     A switch says it in words rather than in a number, and "off" is the same
     answer: nothing to write, nothing to check, nothing to warn about.
+
+    That second reading is on the kind rather than on the group, because the
+    groups hold numbers as well. Read "off" as unset for all of them and a
+    hand-written `Jc = off` stops being the error it is - the tools parse Jc
+    with parse_uint16 and refuse that config - and starts being silently
+    skipped, which leaves the settings page with nothing to say about a line
+    that will bring the interface down.
     """
     text = value.strip()
     if not text:
         return False
-    return not (spec.group in _OFF_MEANS_UNSET and text.lower() in ("0", "off"))
+    if spec.kind == "bool":
+        return text.lower() != "off"
+    return not (spec.group in _OFF_MEANS_UNSET and text == "0")
 
 
 def _get(values: dict[str, str], key: str) -> str:
@@ -1800,10 +1809,12 @@ def _check_value(spec: ParamSpec, value: str) -> str | None:
 def _check_bool(value: str) -> str | None:
     """The two words `awg setconf` parses for a switch.
 
-    "off" only reaches here from a config somebody wrote by hand: _is_set reads
-    it as unset, so the panel's own off is an empty value and no line at all.
-    Accepted anyway, because refusing what the tool accepts would turn a working
-    config into a settings page that cannot be saved.
+    Both of them, though only one arrives: _check_value is reached only for a
+    value _is_set called set, and that reads "off" as unset. So a config that
+    says "off" in words - one an admin wrote by hand - is skipped rather than
+    checked, and saves for that reason rather than this one. "off" is named
+    here anyway so the answer does not depend on which caller asks: this
+    function is about what the tool parses, not about what the panel writes.
     """
     if value.strip().lower() in ("on", "off"):
         return None
