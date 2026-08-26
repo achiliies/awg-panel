@@ -890,3 +890,82 @@ def test_random_trailers_requires_module_feature_support():
     errors = check({"RandomTrailers": "on"}, {**ALL_FEATURES, "random_trailers": False})
     assert "RandomTrailers" in errors
     assert "random packet trailers" in errors["RandomTrailers"]
+
+
+# ------------------------------------------------------------------ is_set
+
+
+@pytest.mark.parametrize(
+    "key, value, expected",
+    [
+        ("RandomTrailers", "off", False),
+        ("RandomTrailers", "", False),
+        ("RandomTrailers", "OFF", False),
+        ("RandomTrailers", "on", True),
+        ("Jc", "0", False),
+        ("Jc", "", False),
+        ("Jc", "4", True),
+        ("S1", "0", False),
+        ("S1", "", False),
+        ("S1", "32", True),
+        ("H1", "0", False),
+        ("H1", "", False),
+        ("H1", "5-500000000", True),
+        ("I1", "0", False),
+        ("I1", "", False),
+        ("I1", "<r 4>", True),
+    ],
+)
+def test_is_set_delegates_to_the_private_helper_for_known_parameters(key, value, expected):
+    """The public lookup by name delegates to _is_set for all modeled parameters.
+
+    Switches are unset on "off" or empty and set on "on", while numeric and
+    pattern parameters treat "0" and empty as unset and real values as set,
+    matching what the config writer needs without reaching for the spec.
+    """
+    assert validate.is_set(key, value) is expected
+
+
+def test_is_set_treats_zero_as_set_for_random_trailers():
+    """A switch rule is on the kind rather than on the group, so "0" is set.
+
+    parse_bool only understands "on" and "off" and refuses "0", so the tools
+    refuse that config rather than skipping the line. Treating "0" as unset
+    would silently omit a line that breaks interface bring-up.
+    """
+    assert validate.is_set("RandomTrailers", "0") is True
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("0", True),
+        ("x", True),
+        ("", False),
+        ("   ", False),
+    ],
+)
+def test_is_set_falls_back_to_emptiness_for_unknown_keys(value, expected):
+    """A key PARAMS does not contain falls back to plain emptiness.
+
+    The caller had a reason to carry a key this module does not model, and
+    dropping its "0" would silently rewrite it. Only empty or whitespace-only
+    values are omitted.
+    """
+    assert validate.is_set("UnknownKey", value) is expected
+
+
+@pytest.mark.parametrize("key", validate.AWG_PARAMS)
+def test_is_set_agrees_with_client_conf_emission_needs(key):
+    """_emit_client_conf relies on is_set to omit unconfigured settings.
+
+    For every key in AWG_PARAMS, an empty value is omitted and a value of "0"
+    is omitted as well, except for RandomTrailers where "0" is not "off" and
+    must not be dropped. Parametrizing over AWG_PARAMS ensures any future
+    obfuscation parameter joins this guarantee automatically.
+    """
+    assert validate.is_set(key, "") is False
+    if key == "RandomTrailers":
+        assert validate.is_set(key, "0") is True
+    else:
+        assert validate.is_set(key, "0") is False
