@@ -455,6 +455,7 @@ discarded.
 | `DNS`, endpoint, default `AllowedIPs`, keepalive | client configs are regenerated; the server is not touched | no | yes |
 | any obfuscation parameter (`Jc`, `S1`–`S4`, `H1`–`H4`, `I1`–`I5`, `RandomTrailers`, …) | `awg-quick down` + `up` | yes, a second or two | yes |
 | `ListenPort`, `Address`, `MTU` | `awg-quick down` + `up` | yes, a second or two | port and address: yes |
+| `DisableCookies` | `awg-quick down` + `up` | yes, a second or two | no — no client config carries it |
 | adding, removing, enabling or disabling a client | `awg syncconf`, live | no | no |
 | a client's own routes or DNS | its config file is rewritten, live | no | that client |
 
@@ -564,6 +565,38 @@ things to check first:
   worse one.
 
 The panel's own HTTP port has the same range, for the same reason.
+
+### Flood protection
+
+One switch, `DisableCookies`, on its own card below the network one. It is not
+obfuscation, which is why it is not on that page: it changes what this server
+does under attack rather than what its traffic looks like, and no client ever
+sees it.
+
+Verifying a handshake costs real work, so forged ones sent from addresses that
+do not exist are a cheap way to load a server. WireGuard's answer is the cookie:
+while the server is under load it stops doing the work and replies with a
+challenge instead, and only a peer really at the address it claims receives the
+reply and can send it back. A genuine client passes that and connects; a flood
+from spoofed addresses never sees the challenge and gets no further.
+
+Switching it on takes that answer away. Under load the handshakes are dropped
+where the challenge would have gone out, so a real client gets silence — no
+error at either end — and no way back in until the flood stops. **Off is the
+right default**, and the panel says so on the save when you turn it on.
+
+Two things it is not:
+
+- **Not a way to stop the server being recognised.** A cookie only ever goes to
+  someone who already holds the server's public key *and* is flooding it; a
+  stranger's junk fails the MAC check and is dropped in silence either way.
+  What the reply looks like on the wire is `H3` and `S3`'s job, and both are on
+  the Obfuscation page.
+- **Not something a client needs.** It is a device setting, never a peer one.
+  Nothing is written into a client config, no peer has to be new enough, and
+  nothing has to be re-imported — the only 3.1 setting on either page of which
+  that is true. The interface still restarts, because it is an `[Interface]`
+  value like any other.
 
 ## IPv6, and who is still leaking
 
@@ -733,7 +766,9 @@ room, the field comes back at `0` or empty with a sentence saying which setting
 took the space, rather than a value the save would then reject.
 
 The advanced group is left empty on a fresh install, on purpose. Those settings
-were added in AmneziaWG 3.0 (and 3.1 for `RandomTrailers`) and the values shown
+were added in AmneziaWG 3.0 (and 3.1 for `RandomTrailers`; 3.1's other addition,
+`DisableCookies`, is server-side and sits on the Server page instead) and the
+values shown
 are the ones the protocol already uses, so writing them changes nothing; setting
 them to anything else breaks every peer that does not speak that version — which
 is still most of them — along with every peer that imported a `.conf` through

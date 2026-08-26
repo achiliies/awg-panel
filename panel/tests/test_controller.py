@@ -255,6 +255,7 @@ def test_features_without_awg_are_permissive_and_flagged_unknown(no_awg):
         "content_padding",
         "timers",
         "random_trailers",
+        "disable_cookies",
     ):
         assert features[name] is True, name
     assert set(features["unknown"]) == {
@@ -264,6 +265,7 @@ def test_features_without_awg_are_permissive_and_flagged_unknown(no_awg):
         "content_padding",
         "timers",
         "random_trailers",
+        "disable_cookies",
     }
 
 
@@ -479,6 +481,7 @@ def test_mock_reports_a_complete_feature_set(server_conf):
         "content_padding",
         "timers",
         "random_trailers",
+        "disable_cookies",
     ):
         assert features[name] is True, name
     assert features["tools_version"] and features["module_version"]

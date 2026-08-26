@@ -79,6 +79,7 @@ _PROBE_TOKENS: dict[str, tuple[str, ...]] = {
     "content_padding": ("cpa", "content-padding", "contentpaddingaddition"),
     "timers": ("rekey-after-time", "rekeyaftertime", "reject-after-time", "rejectaftertime"),
     "random_trailers": ("random-trailers", "randomtrailers"),
+    "disable_cookies": ("disable-cookies", "disablecookies"),
 }
 
 # Imitation packets and header ranges landed together upstream; anything at or
@@ -513,6 +514,7 @@ class AwgController:
             "content_padding": caps["content_padding"],
             "timers": caps["timers"],
             "random_trailers": caps["random_trailers"],
+            "disable_cookies": caps["disable_cookies"],
             "unknown": sorted(set(unknown)),
         }
 

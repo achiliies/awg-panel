@@ -24,6 +24,7 @@ ALL_FEATURES = {
     "content_padding": True,
     "timers": True,
     "random_trailers": True,
+    "disable_cookies": True,
 }
 
 # A well-formed 32-byte base64 key. Not a real one and never used to connect.
@@ -772,6 +773,7 @@ def test_every_param_is_explained(key):
         "imitation",
         "advanced",
         "hooks",
+        "protection",
     }, key
     assert spec.kind in {
         "int",
@@ -792,6 +794,7 @@ def test_catalog_covers_every_mirrored_parameter():
     assert set(validate.AWG_PARAMS) <= set(validate.PARAMS)
     assert set(validate.NETWORK_PARAMS) <= set(validate.PARAMS)
     assert set(validate.HOOK_PARAMS) <= set(validate.PARAMS)
+    assert set(validate.SERVER_ONLY_PARAMS) <= set(validate.PARAMS)
 
 
 def test_param_list_is_json_serialisable_and_ordered():
@@ -890,6 +893,73 @@ def test_random_trailers_requires_module_feature_support():
     errors = check({"RandomTrailers": "on"}, {**ALL_FEATURES, "random_trailers": False})
     assert "RandomTrailers" in errors
     assert "random packet trailers" in errors["RandomTrailers"]
+
+
+# ---------------------------------------------------------- disable cookies
+
+
+def test_disable_cookies_is_server_only_and_never_mirrored():
+    """The whole reason it is not in AWG_PARAMS: that tuple is copied into every
+    client config, and a client has nothing to do with this switch."""
+    assert "DisableCookies" in validate.SERVER_ONLY_PARAMS
+    assert "DisableCookies" not in validate.AWG_PARAMS
+    assert validate.PARAMS["DisableCookies"].must_match_client is False
+
+
+def test_disable_cookies_is_not_part_of_the_advanced_group():
+    """ADVANCED_PARAMS is read off the group and drives the generator. Drawing a
+    server-side DoS switch as part of an obfuscation profile would switch off
+    flood protection on every Generate."""
+    assert "DisableCookies" not in validate.ADVANCED_PARAMS
+    assert "DisableCookies" not in validate.randomize()
+    assert "DisableCookies" not in validate.randomize_advanced()
+
+
+def test_disable_cookies_accepts_on_and_reads_off_as_unset():
+    assert check({"DisableCookies": "on"}) == {}
+    assert validate._is_set(validate.PARAMS["DisableCookies"], "off") is False
+    assert check({"DisableCookies": "off"}) == {}
+
+
+@pytest.mark.parametrize("value", ["yes", "true", "1", "0", "disabled"])
+def test_disable_cookies_rejects_unrecognized_values(value):
+    """parse_bool takes on and off and nothing else; anything here stops the
+    interface coming back up."""
+    errors = check({"DisableCookies": value})
+    assert "DisableCookies" in errors
+    assert "Use on or off" in errors["DisableCookies"]
+
+
+def test_disable_cookies_warns_about_what_it_costs_when_on():
+    """Nothing about a flood is visible from the settings page, so the save is the
+    only moment anyone can be told the protection is going away."""
+    matching = [t for t in validate.warnings_for({"DisableCookies": "on"}) if "DisableCookies" in t]
+    assert matching, "enabling it must say what it costs"
+    assert "cookie challenge" in matching[0]
+    assert not [
+        t for t in validate.warnings_for({"DisableCookies": "off"}) if "DisableCookies" in t
+    ]
+
+
+def test_disable_cookies_is_not_flagged_as_importer_unsafe():
+    """importer_safe is about the Amnezia app dropping lines from a client config.
+    This one never reaches a client config, so warning about the importer would
+    send an admin looking for a client to fix that does not exist."""
+    assert validate.PARAMS["DisableCookies"].importer_safe is True
+    assert not [
+        text for text in validate.warnings_for({"DisableCookies": "on"}) if "Amnezia app" in text
+    ]
+
+
+def test_disable_cookies_unsupported_message_blames_no_client():
+    """A server-only setting an old module cannot do is simply not done. The
+    stock wording talks about clients failing to connect, which is a wrong
+    trail here."""
+    assert check({"DisableCookies": "on"}, {**ALL_FEATURES, "disable_cookies": True}) == {}
+    errors = check({"DisableCookies": "on"}, {**ALL_FEATURES, "disable_cookies": False})
+    assert "DisableCookies" in errors
+    assert "do nothing at all" in errors["DisableCookies"]
+    assert "clients" not in errors["DisableCookies"]
 
 
 # ------------------------------------------------------------------ is_set

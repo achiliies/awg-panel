@@ -272,6 +272,30 @@ def test_a_switch_set_to_off_stays_out_of_the_client_config(
     assert values["Jc"] == "4"
 
 
+@pytest.mark.parametrize("written", ["on", "off"])
+def test_a_server_only_switch_never_reaches_a_client_config(api, server_conf, conf_dir, written):
+    """DisableCookies lives in the server's [Interface] and stops there.
+
+    It is not in AWG_PARAMS for exactly this reason: that tuple is what gets
+    mirrored into every client config, and this switch decides what the server
+    does under a handshake flood. A client has no use for the line, cannot act
+    on it, and the Amnezia app's importer would drop it anyway - so copying it
+    out would be noise in every config the panel ever issues.
+    """
+    text = server_conf.read_text(encoding="utf-8")
+    server_conf.write_text(
+        text.replace("Jc = 4", f"Jc = 4\nDisableCookies = {written}"), encoding="utf-8"
+    )
+
+    create(api, "phone")
+
+    values = client_secrets(conf_dir, "phone")
+    assert "DisableCookies" not in values
+    # The obfuscation beside it still is mirrored: this is one key, not a rule
+    # about switches or about the [Interface] section.
+    assert values["Jc"] == "4"
+
+
 def test_config_download_of_a_missing_client_is_a_404(api):
     assert api.get(api_url("clients/ghost/config")).status_code == 404
 

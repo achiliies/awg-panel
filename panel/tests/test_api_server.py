@@ -141,6 +141,49 @@ def test_a_bad_parameter_is_rejected_with_the_field_named(api, server_conf, serv
     assert server_conf.read_text(encoding="utf-8") == server_conf_text
 
 
+def test_a_server_only_change_restarts_but_asks_nobody_to_reimport(api, server_conf, conf_dir):
+    """DisableCookies is an [Interface] value, so the tunnel has to come back for
+    it - but it appears in no client config, so telling the fleet to re-import
+    would be a lie about a change no peer can read.
+
+    That split is why it is not folded in with the obfuscation keys: those two
+    answers used to be the same intersection, and a setting that restarts
+    without costing a re-import had no way to say so.
+    """
+    store.add_client("phone")
+    before = client_conf(conf_dir, "phone")
+
+    response = api.put(api_url("server"), {"params": {"DisableCookies": "on"}}, format="json")
+
+    assert response.status_code == 200, response.content
+    body = response.json()
+    assert body["needsRestart"] is True
+    assert body["mustReimport"] is False
+    assert body["applied"] is True
+
+    assert interface_value(server_conf, "DisableCookies") == "on"
+    # The switch costs the flood protection, and the save is the only place an
+    # admin is in a position to hear that.
+    assert any("cookie challenge" in text for text in body["warnings"]), body["warnings"]
+    # Nothing the client holds moved, which is what mustReimport just promised.
+    assert client_conf(conf_dir, "phone") == before
+
+
+def test_clearing_a_server_only_switch_removes_the_line(api, server_conf):
+    """Empty takes the line out rather than writing it blank, the same as every
+    other [Interface] parameter: awg-quick reads a blank value as malformed."""
+    api.put(api_url("server"), {"params": {"DisableCookies": "on"}}, format="json")
+    assert interface_value(server_conf, "DisableCookies") == "on"
+
+    response = api.put(api_url("server"), {"params": {"DisableCookies": ""}}, format="json")
+
+    assert response.status_code == 200, response.content
+    # The line itself, not the parsed value: a blank `DisableCookies =` reads
+    # back as "" through the helper exactly like an absent one, and blank is
+    # the thing awg-quick refuses.
+    assert "DisableCookies" not in server_conf.read_text(encoding="utf-8")
+
+
 def test_an_obfuscation_change_needs_a_restart_and_a_reimport(api, server_conf, conf_dir):
     store.add_client("phone")
     before = client_conf(conf_dir, "phone")

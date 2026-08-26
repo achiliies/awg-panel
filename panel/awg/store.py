@@ -406,7 +406,11 @@ def read_server() -> ServerView:
     env = clientsenv.read_env()
     section = conf.interface
     private = section.get("PrivateKey") or ""
-    params = {key: value for key in validate.AWG_PARAMS if (value := section.get(key)) is not None}
+    params = {
+        key: value
+        for key in (*validate.AWG_PARAMS, *validate.SERVER_ONLY_PARAMS)
+        if (value := section.get(key)) is not None
+    }
     network = _subnet(conf, env)
     return ServerView(
         iface=iface(),
@@ -474,7 +478,12 @@ def save_server(changes: dict) -> dict:
 
         changed = {key for key, value in proposed.items() if current.get(key, "") != value}
         obfuscation = changed.intersection(validate.AWG_PARAMS)
-        needs_restart = bool(obfuscation or changed.intersection(_CONF_NETWORK))
+        # Deliberately not folded into `obfuscation` above. It is an [Interface]
+        # value like the rest, so the interface has to come back for it - but it
+        # appears in no client config, which makes telling the fleet to
+        # re-import a lie about a change no peer can read.
+        server_only = changed.intersection(validate.SERVER_ONLY_PARAMS)
+        needs_restart = bool(obfuscation or server_only or changed.intersection(_CONF_NETWORK))
         must_reimport = bool(obfuscation or changed.intersection(_CLIENT_VISIBLE))
         # A client's Endpoint is "<host>:<ListenPort>" unless clients.env pins
         # EndpointPort, which it does not by default. Moving the port therefore
@@ -497,6 +506,7 @@ def save_server(changes: dict) -> dict:
         if (
             changed.intersection(_CONF_NETWORK)
             or obfuscation
+            or server_only
             or changed.intersection(validate.HOOK_PARAMS)
         ):
             backup_conf()
@@ -1972,7 +1982,7 @@ def _http(method: str, url: str, headers: dict[str, str]) -> str | None:
 def _current_values(conf: ServerConf, env: dict[str, str]) -> dict[str, str]:
     """Everything validate.py knows about, as it stands now."""
     values: dict[str, str] = {}
-    for key in (*validate.AWG_PARAMS, *_CONF_NETWORK):
+    for key in (*validate.AWG_PARAMS, *validate.SERVER_ONLY_PARAMS, *_CONF_NETWORK):
         # Address through _address_line, so a config carrying its IPv6 prefix on
         # a second Address line is compared and rewritten with that prefix still
         # in it. Reading the first line alone made _keep_prefix6 believe there
@@ -2168,11 +2178,11 @@ def _retarget_nat(conf: ServerConf, before: str, after: str) -> list[str]:
 
 
 def _apply_to_conf(conf: ServerConf, proposed: dict[str, str], changed: set[str]) -> None:
-    for key in (*_CONF_NETWORK, *validate.AWG_PARAMS):
+    for key in (*_CONF_NETWORK, *validate.AWG_PARAMS, *validate.SERVER_ONLY_PARAMS):
         if key not in changed:
             continue
         value = proposed[key]
-        if not value and key in validate.AWG_PARAMS:
+        if not value and key in (*validate.AWG_PARAMS, *validate.SERVER_ONLY_PARAMS):
             # Empty removes the line rather than writing it blank: awg-quick
             # reads an empty value as malformed and refuses the whole config.
             conf.interface.delete(key)

@@ -21,6 +21,11 @@ changing it invalidates every config already issued. It is deliberately False
 for things a client merely receives a copy of (DNS, AllowedIPs): those still
 want a re-issue, but that is the store's call, not a property of the protocol.
 
+Most of what is here ends up on both ends. `SERVER_ONLY_PARAMS` is the
+exception and DisableCookies is its first member: an [Interface] setting the
+server keeps to itself, which is why it is not in `AWG_PARAMS` - that tuple is
+what gets copied into every client config.
+
 `importer_safe` is the hard-won part, and it is False for exactly the settings
 AmneziaWG 3.0 added: HeaderProtectionKey, ContentPaddingAddition and the timer
 overrides - and for RandomTrailers, which 3.1 added on the same terms.
@@ -118,6 +123,18 @@ AWG_PARAMS: tuple[str, ...] = (
     "MaxHandshakeAttempts",
     "RandomTrailers",
 )
+
+# Settings that live in the server's [Interface] and stop there.
+#
+# AWG_PARAMS above is not "the obfuscation settings", it is the set mirrored
+# into every client config, and the two stopped being the same thing here. A
+# switch the server keeps to itself has no line to write on a client and no
+# value for one to agree on, so putting it in that tuple would copy it into
+# every config the panel issues and tell the whole fleet to re-import for a
+# change no peer can even read. It still belongs to the [Interface] section,
+# which is why it is a tuple beside that one rather than a group of its own in
+# clients.env: everything that reads or writes awg0.conf wants both.
+SERVER_ONLY_PARAMS: tuple[str, ...] = ("DisableCookies",)
 
 NETWORK_PARAMS: tuple[str, ...] = (
     "ListenPort",
@@ -879,6 +896,33 @@ _SPECS: list[ParamSpec] = [
         recommended="on, once every peer is known to run AmneziaWG 3.1",
     ),
     ParamSpec(
+        key="DisableCookies",
+        group="protection",
+        label="Disable cookie replies",
+        kind="bool",
+        help_short="Stops the server answering a handshake flood with a cookie challenge.",
+        help_long=(
+            "Verifying a handshake costs real work, so forged ones sent from addresses that do "
+            "not exist are a cheap way to load a server. The cookie is WireGuard's answer to "
+            "that: while the server is under load it stops doing the work and replies with a "
+            "challenge instead, and only a peer really at the address it claims ever receives "
+            "the reply and can send it back. A genuine client passes that and connects; a flood "
+            "from spoofed addresses never sees the challenge and gets no further. "
+            "Switching this on takes the answer away. Under load the handshakes are dropped "
+            "where the challenge would have gone out, so a real client gets silence with no "
+            "error and no way back in until the flood stops - the cookie was its ticket. "
+            "It is the server's own business and no client reads it: nothing is written into "
+            "any client config, no peer needs it and nothing has to be re-imported. It also "
+            "does not hide anything, and is not a way to stop the server being recognised - a "
+            "cookie only ever goes to someone who already has the server's public key and is "
+            "flooding it, and H3 and S3 are what shape the reply on the wire. Leave it off "
+            "unless something in front of this server already absorbs floods and the replies "
+            "are the thing you want gone."
+        ),
+        must_match_client=False,
+        recommended="off - the cookie is worth more than it costs",
+    ),
+    ParamSpec(
         key="ListenPort",
         group="network",
         label="UDP listen port",
@@ -1128,6 +1172,7 @@ FEATURE_OF: dict[str, str] = {
     "KeepaliveTimeout": "timers",
     "MaxHandshakeAttempts": "timers",
     "RandomTrailers": "random_trailers",
+    "DisableCookies": "disable_cookies",
 }
 
 _FEATURE_LABEL: dict[str, str] = {
@@ -1137,6 +1182,7 @@ _FEATURE_LABEL: dict[str, str] = {
     "timers": "timer overrides",
     "header_ranges": "header ranges",
     "random_trailers": "random packet trailers",
+    "disable_cookies": "the cookie switch",
 }
 
 _INT_RE = re.compile(r"^-?\d+$")
@@ -1229,6 +1275,20 @@ def warnings_for(values: dict[str, str]) -> list[str]:
             "without saying so. Either way that client negotiates without them, is rejected by "
             "the server, and shows no error at all. Clear them, or make sure every peer is new "
             "enough and is configured by hand."
+        )
+
+    # Not "this will not work" like the rest of this function, but "this works
+    # and costs you something you may not have meant to spend". Nothing about a
+    # flood is visible from the settings page, so the moment the switch goes on
+    # is the only moment anyone is in a position to be told.
+    if _is_set(PARAMS["DisableCookies"], _get(values, "DisableCookies")):
+        out.append(
+            "DisableCookies is on: this server no longer answers a handshake flood with a "
+            "cookie challenge, which is what lets a genuine client through one while forged "
+            "handshakes from spoofed addresses are turned away. While it is under load those "
+            "handshakes are dropped instead, and real clients are dropped with them, with no "
+            "error at either end. It hides nothing and no client reads it - leave it off "
+            "unless something else in front of this server is absorbing floods."
         )
 
     hostile: list[str] = []
@@ -2258,7 +2318,7 @@ def _check_features(values: dict[str, str], errors: dict[str, str], add, feature
         if key in errors or not _is_set(PARAMS[key], _get(values, key)):
             continue
         if features.get(feature) is False:
-            add(key, _unsupported(feature))
+            add(key, _unsupported(feature, key))
 
     for key in ("H1", "H2", "H3", "H4"):
         if key in errors or key not in values:
@@ -2274,12 +2334,21 @@ def _check_features(values: dict[str, str], errors: dict[str, str], add, feature
             )
 
 
-def _unsupported(feature: str) -> str:
+def _unsupported(feature: str, key: str) -> str:
     label = _FEATURE_LABEL.get(feature, feature)
+    # What an unsupported setting costs depends on who else was going to read
+    # it. For everything mirrored into a client config the answer is the clients
+    # - they use the value, the server ignores it and the handshake fails. A
+    # server-only setting has no such other end: it is simply not done, and
+    # saying otherwise would send an admin looking for a client to blame.
+    consequence = (
+        "so it would do nothing at all"
+        if key in SERVER_ONLY_PARAMS
+        else "so this value would be ignored and the clients that do use it would fail to connect"
+    )
     return (
-        f"The installed AmneziaWG does not support {label}, so this value would be ignored and "
-        "the clients that do use it would fail to connect. Clear it, or upgrade the kernel "
-        "module and tools."
+        f"The installed AmneziaWG does not support {label}, {consequence}. Clear it, or "
+        "upgrade the kernel module and tools."
     )
 
 

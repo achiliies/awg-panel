@@ -253,6 +253,7 @@ class MockController:
             "content_padding": True,
             "timers": True,
             "random_trailers": True,
+            "disable_cookies": True,
             "unknown": [],
         }
 

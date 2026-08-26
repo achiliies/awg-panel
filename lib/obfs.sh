@@ -31,6 +31,12 @@
 # AmneziaWG 3.1 added, is left unset here on the same grounds: the installer
 # has no way to know what every client runs, and the panel is where it can be
 # switched on once they are known. Nothing below draws it.
+#
+# DisableCookies, 3.1's other addition, is left unset for a different reason:
+# not a client that cannot read it, but a default worth keeping. It suppresses
+# the cookie challenge that answers a handshake flood, and off is what a server
+# wants unless something in front of it is already absorbing one. It is not
+# obfuscation and nothing below draws it either.
 
 # shellcheck source=lib/i18n.sh
 . "$(dirname "${BASH_SOURCE[0]}")/i18n.sh"

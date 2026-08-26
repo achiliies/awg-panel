@@ -1,4 +1,11 @@
-import { HardDrives, Network, SlidersHorizontal, Warning, type Icon } from "@/lib/icons";
+import {
+  HardDrives,
+  Network,
+  ShieldCheck,
+  SlidersHorizontal,
+  Warning,
+  type Icon,
+} from "@/lib/icons";
 import { useTranslation } from "react-i18next";
 
 import { CopyButton } from "@/components/CopyButton";
@@ -22,6 +29,11 @@ import type { ParamGroup as ParamGroupId, ParamSpec } from "@/api/types";
 /*
  * The Server Config page: where the tunnel listens, and how fast it lets anyone
  * through it.
+ *
+ * The protection card below the network one is not obfuscation and did not go
+ * with it: it turns off the cookie challenge that answers a handshake flood,
+ * which changes what this server does under attack rather than what its traffic
+ * looks like, and no client ever sees it.
  *
  * Everything that disguises the traffic used to be here too, and moved to the
  * Obfuscation page. The two are one config behind one PUT, but they are not one
@@ -47,13 +59,14 @@ import type { ParamGroup as ParamGroupId, ParamSpec } from "@/api/types";
  */
 
 /** Card order. The catalog decides which groups exist; this decides the story. */
-const GROUP_ORDER: readonly ParamGroupId[] = ["network"];
+const GROUP_ORDER: readonly ParamGroupId[] = ["network", "protection"];
 
 /** The groups this page owns, and therefore the only ones it can save. */
-const OWNS: ReadonlySet<string> = new Set(["network"]);
+const OWNS: ReadonlySet<string> = new Set(["network", "protection"]);
 
 const GROUP_ICONS: Readonly<Record<string, Icon>> = {
   network: Network,
+  protection: ShieldCheck,
 };
 
 export default function ServerConfig(): JSX.Element {

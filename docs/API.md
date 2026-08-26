@@ -819,6 +819,14 @@ than a value, so there is nothing to copy between the two ends — but both ends
 still need it, and it does nothing to data packets while `ContentPaddingAddition`
 is set.
 
+AmneziaWG 3.1's other addition, `DisableCookies`, is deliberately not in this
+scope and is not drawn by either generator. It is a server-side switch — it
+suppresses the cookie challenge that answers a handshake flood — so it belongs
+to no obfuscation profile, appears in no client config, and never sets
+`mustReimport`. It is still an `[Interface]` value, so saving it sets
+`needsRestart`, and `PUT api/v1/server` takes it under `params` like any other
+key. Turning it on comes back with a warning saying what it costs.
+
 `ContentPaddingAddition` comes back as a range rather than a number, and that is
 not cosmetic. The kernel uses it *instead of* the padding it does anyway — every
 packet is otherwise rounded up to a multiple of 16 bytes — so a single value
