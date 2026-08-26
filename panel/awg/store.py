@@ -1871,7 +1871,11 @@ def _emit_client_conf(
     ]
     for key in validate.AWG_PARAMS:
         value = (conf.interface.get(key) or "").strip()
-        if value and value != "0":
+        # validate's own reading of "would this be written at all", rather than
+        # a second copy of it here: a switch says it is off in words, and a
+        # hand-written `RandomTrailers = off` copied into every client config
+        # is a line that means nothing on either end.
+        if validate.is_set(key, value):
             lines.append(f"{key} = {value}")
     lines += [
         "",

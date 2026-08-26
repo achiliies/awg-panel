@@ -242,6 +242,36 @@ def test_config_download_carries_exactly_one_private_key(api, conf_dir):
     assert values["Endpoint"] == "203.0.113.10:41234"
 
 
+@pytest.mark.parametrize(
+    ("written", "expected"),
+    [("on", "on"), ("off", None), ("", None)],
+)
+def test_a_switch_set_to_off_stays_out_of_the_client_config(
+    api, server_conf, conf_dir, written, expected
+):
+    """The client config carries the parameters that are actually set, and for a
+    switch "off" is not one of them.
+
+    The writer used to decide that with `value != "0"`, which knows about numbers
+    and not about switches, so a server config an admin had written
+    `RandomTrailers = off` into put that line in every client config it issued -
+    a line that means nothing at either end and that the Amnezia app's importer
+    drops anyway.
+    """
+    text = server_conf.read_text(encoding="utf-8")
+    if written:
+        server_conf.write_text(
+            text.replace("Jc = 4", f"Jc = 4\nRandomTrailers = {written}"), encoding="utf-8"
+        )
+
+    create(api, "phone")
+
+    values = client_secrets(conf_dir, "phone")
+    assert values.get("RandomTrailers") == expected
+    # The numbers beside it are unaffected: only the switch reads "off" as unset.
+    assert values["Jc"] == "4"
+
+
 def test_config_download_of_a_missing_client_is_a_404(api):
     assert api.get(api_url("clients/ghost/config")).status_code == 404
 

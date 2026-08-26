@@ -1751,6 +1751,18 @@ def _is_set(spec: ParamSpec, value: str) -> bool:
     return not (spec.group in _OFF_MEANS_UNSET and text == "0")
 
 
+def is_set(key: str, value: str) -> bool:
+    """_is_set by parameter name, for the config writers in store.py.
+
+    Whether a value gets a line in a config is this module's answer to give,
+    and the writers used to carry their own copy of it - `value != "0"` - which
+    knew about numbers and not about switches. A key this module does not know
+    is written as it stands: the caller had a reason to carry it.
+    """
+    spec = PARAMS.get(key)
+    return bool(value.strip()) if spec is None else _is_set(spec, value)
+
+
 def _get(values: dict[str, str], key: str) -> str:
     raw = values.get(key)
     return "" if raw is None else str(raw).strip()
