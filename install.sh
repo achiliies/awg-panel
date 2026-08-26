@@ -1811,8 +1811,12 @@ echo "$(t "  decoys: ${GEN_DESC}" "  имитация протокола: ${GEN_
 # setting is something only an upgrade fixes. Asking awg_supports again is free
 # - lib/obfs.sh read the usage once and kept it.
 if [[ -n "$HPK" ]]; then
-    echo "$(t "  header protection on, content padding ${CPA:-off}, timers ${REKEY_AFTER:-off}/${REJECT_AFTER:-off}s" \
-              "  защита заголовка включена, набивка содержимого ${CPA:-выкл}, таймеры ${REKEY_AFTER:-выкл}/${REJECT_AFTER:-выкл} с")"
+    # The timers read as ranges rather than numbers now, so the line says what
+    # a range means here. An operator who has installed this before will notice
+    # the change on the next server they build, and "redrawn per handshake" is
+    # the whole of what there is to know about it.
+    echo "$(t "  header protection on, content padding ${CPA:-off}, timers ${REKEY_AFTER:-off}/${REJECT_AFTER:-off}s, redrawn per handshake" \
+              "  защита заголовка включена, набивка содержимого ${CPA:-выкл}, таймеры ${REKEY_AFTER:-выкл}/${REJECT_AFTER:-выкл} с, перевыбираются на каждое рукопожатие")"
 elif awg_supports header-protection-key; then
     echo "$(t "  header protection off: MTU ${MTU} leaves no padding for its nonce" \
               "  защита заголовка выключена: при MTU ${MTU} не остаётся набивки для одноразового номера")"

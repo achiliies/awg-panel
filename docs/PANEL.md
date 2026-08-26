@@ -723,11 +723,11 @@ that argues with the page it fills in is a generator nobody trusts.
 | `I1`–`I5` | imitation | three to five packets of one protocol: a WebRTC call, a QUIC connection or a run of DNS lookups |
 | `HeaderProtectionKey` | advanced | 32 bytes from `/dev/urandom`, and only when `S1`–`S4` can carry its 12-byte nonce |
 | `ContentPaddingAddition` | advanced | a range: top 32–96 bytes, floor anywhere under a third of it |
-| `RekeyAfterTime` | advanced | 120–180 s |
-| `RekeyTimeout` | advanced | 4–7 s |
-| `KeepaliveTimeout` | advanced | 8–15 s |
-| `MaxHandshakeAttempts` | advanced | 16–24 |
-| `RejectAfterTime` | advanced | derived, not drawn: `RekeyAfterTime` + `KeepaliveTimeout` + `RekeyTimeout`, plus 60–180 s |
+| `RekeyAfterTime` | advanced | a range placed inside 120–180 s |
+| `RekeyTimeout` | advanced | a range placed inside 4–7 s |
+| `KeepaliveTimeout` | advanced | a range placed inside 8–15 s |
+| `MaxHandshakeAttempts` | advanced | a range placed inside 16–24 |
+| `RejectAfterTime` | advanced | derived, not drawn: the **tops** of `RekeyAfterTime` + `KeepaliveTimeout` + `RekeyTimeout`, plus 60–180 s, with its own width drawn from that same band |
 
 The advanced rows are `install.sh` drawing from the second preset table, the one
 the panel calls `ADVANCED_PROFILES`, at its standard band. It used to leave that
@@ -821,12 +821,57 @@ the lines. Both fail with no error at either end. Clearing the group — empty
 every field and save, or delete the lines from `awg0.conf` — puts the server back
 where it was.
 
+**The five timers are ranges, not numbers.** `awg setconf` parses each of them
+with `u16_range_from_string`, and the kernel calls `u16_range_pick_one` every
+time it arms the timer — a fresh value per event, not one per server. That
+matters more than it sounds. Randomising a timer per server means a flow is
+periodic at an unknown period; periodicity detection does not need to know the
+period, so an observer watching one flow for an hour still sees a metronome.
+Randomising it per event is what removes the beat. Handshake cadence is the one
+feature that survives every byte-level disguise — no amount of junk, padding or
+header randomisation touches it — so this is the cheapest strengthening on the
+page: it costs nothing on the wire and nothing in compatibility beyond the 3.0
+the group already needs.
+
+A range is drawn *inside* the band rather than being the band, because a range
+every server on a profile shares would be a per-profile constant in place of a
+per-server one — the same argument the bands themselves rest on. A plain number
+is still accepted everywhere, since that is what every server installed before
+this wrote and what `awg showconf` prints back for a range of width zero.
+
+Expect the effect to differ across the five. `KeepaliveTimeout` and
+`RekeyTimeout` gain the most: the kernel arms each of those with a single fresh
+draw, and they shape the two patterns an observer can actually measure — the
+beat of an idle tunnel and the retry burst while a filter is dropping
+handshakes. `RekeyAfterTime` gains the least, and not for an obvious reason: the
+kernel re-asks that question on every batch of packets it sends rather than once
+per cycle, drawing again each time, so on a busy tunnel the first low draw wins
+and the rekey lands within seconds of the bottom of the range. The spread is
+real on a quiet tunnel and thin on a loaded one. It is still worth writing as a
+range — the bottom is then not the same number on two servers — but it is not
+where the win is.
+
 `RejectAfterTime` is derived rather than drawn, because it has to outlast a
 whole rekey cycle rather than the longest single timer in it — a peer starts a
 handshake at `RekeyAfterTime` and may then spend `KeepaliveTimeout` +
 `RekeyTimeout` waiting for the answer, so the three add up. It is also the
 number the far end measures its own key against, and a responder that reaches
 the threshold first starts handshaking on top of the initiator.
+
+With ranges the sum is taken from the **top** of each of those three and cleared
+by the **bottom** of the reject range. The kernel is less demanding — `receive.c`
+subtracts the bottoms of `KeepaliveTimeout` and `RekeyTimeout` rather than the
+tops — but a derivation that leaned on that would make the unluckiest draw in a
+few thousand a stalled tunnel on a server nobody is watching, and the room costs
+nothing. The save bar checks the same three bounds against the same ends, so a
+set typed in by hand is held to what the kernel will actually do with it rather
+than to what it does on average.
+
+The ceilings on these fields are not cosmetic. The kernel stores each range as
+two `u16` packed into a `u32`, and the tools' parser truncates to that without
+checking the high end first: `RekeyAfterTime = 70000` is not refused, it is
+silently 4464. The per-field maximums are what keeps a number nobody chose off
+the wire.
 
 `ContentPaddingAddition` comes back as a range, never a number. The kernel uses
 it *instead of* the padding it does anyway — without it every packet is rounded

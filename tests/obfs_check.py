@@ -155,13 +155,7 @@ def check(number: int, values: dict[str, str]) -> None:
 
     # Drawn as a set or not at all: a config carrying three of the five timers
     # is one where the two the protocol falls back on were chosen by nobody.
-    timers = (
-        "RekeyAfterTime",
-        "RekeyTimeout",
-        "RejectAfterTime",
-        "KeepaliveTimeout",
-        "MaxHandshakeAttempts",
-    )
+    timers = validate.TIMER_PARAMS
     drawn = [name for name in timers if values.get(name)]
     if drawn and len(drawn) != len(timers):
         fail(number, f"only {len(drawn)} of {len(timers)} timers drawn: {drawn}")
@@ -192,26 +186,50 @@ def check_advanced_bands(number: int, values: dict[str, str]) -> None:
     """
     band = validate.ADVANCED_PROFILES["standard"]
 
-    def within(key: str, bounds: tuple[int, int]) -> None:
-        value = int(values[key])
-        if not bounds[0] <= value <= bounds[1]:
-            fail(number, f"{key}={value} is outside the panel's {bounds[0]}-{bounds[1]} band")
+    def ends(key: str) -> tuple[int, int]:
+        """The two ends of a timer, whichever shape the shell wrote it in.
 
-    within("RekeyAfterTime", band.rekey_after)
-    within("RekeyTimeout", band.rekey_timeout)
-    within("KeepaliveTimeout", band.keepalive)
+        Bare numbers are still legal and lib/obfs.sh still emits one when a band
+        is too narrow to place a range inside, so this reads both rather than
+        insisting on the dash.
+        """
+        parsed = validate._parse_range(values[key])
+        if parsed is None:
+            fail(number, f"{key}={values[key]!r} is neither a number nor a range")
+            return (0, 0)
+        return parsed
+
+    def within(key: str, bounds: tuple[int, int]) -> tuple[int, int]:
+        low, high = ends(key)
+        if not bounds[0] <= low <= high <= bounds[1]:
+            fail(number, f"{key}={low}-{high} is outside the panel's {bounds[0]}-{bounds[1]} band")
+        # A range that collapsed to a point is the constant the ranges exist to
+        # avoid, and a shell that has quietly stopped drawing them is the exact
+        # drift this file is here to catch: the values would still validate, and
+        # every server would still differ from every other, while the cadence on
+        # each one went back to a metronome.
+        if low == high and bounds[1] > bounds[0]:
+            fail(number, f"{key}={low} was drawn as a single value inside a {bounds} band")
+        return low, high
+
+    rekey_after = within("RekeyAfterTime", band.rekey_after)
+    rekey_timeout = within("RekeyTimeout", band.rekey_timeout)
+    keepalive = within("KeepaliveTimeout", band.keepalive)
     within("MaxHandshakeAttempts", band.attempts)
 
     # Derived rather than drawn, so what is checked is the derivation: the three
-    # timers a peer may spend on one rekey cycle, plus the profile's margin.
-    floor = (
-        int(values["RekeyAfterTime"])
-        + int(values["KeepaliveTimeout"])
-        + int(values["RekeyTimeout"])
-    )
-    margin = int(values["RejectAfterTime"]) - floor
+    # timers a peer may spend on one rekey cycle, plus the profile's margin. The
+    # tops of the three and the bottom of this one, which is the pairing
+    # randomize_advanced uses and stricter than the kernel demands - see the
+    # comment there.
+    reject_lo, reject_hi = ends("RejectAfterTime")
+    floor = rekey_after[1] + keepalive[1] + rekey_timeout[1]
+    margin = reject_lo - floor
     if not band.margin[0] <= margin <= band.margin[1]:
         fail(number, f"RejectAfterTime sits {margin}s above the rekey cycle, outside {band.margin}")
+    width = reject_hi - reject_lo
+    if not band.margin[0] <= width <= band.margin[1]:
+        fail(number, f"RejectAfterTime spans {width}s, outside the margin band {band.margin}")
 
     padding = values.get("ContentPaddingAddition", "")
     if padding:

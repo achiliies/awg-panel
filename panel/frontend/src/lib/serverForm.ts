@@ -197,8 +197,13 @@ function checkLocally(spec: ParamSpec, raw: string, t: TFunction): string | unde
   }
 
   if (spec.kind === "range") {
+    // `<` rather than `<=`: the API accepts a range whose ends are equal, and a
+    // field that refuses what a save would take is a field that invents a rule.
+    // It matters more now than it did - the five timers joined this path, and a
+    // hand-written config full of single values reaches it as `120-120` the
+    // moment somebody edits one end of it.
     const match = /^(\d+)(?:-(\d+))?$/.exec(value);
-    if (!match || (match[2] !== undefined && Number(match[2]) <= Number(match[1]))) {
+    if (!match || (match[2] !== undefined && Number(match[2]) < Number(match[1]))) {
       return String(
         t("server.rangeInvalid", {
           defaultValue:

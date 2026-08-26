@@ -153,6 +153,23 @@ rand_int() {
     printf '%s' $(( lo + draw % span ))
 }
 
+# A sub-interval of [lo, hi], printed as "a-b" with b strictly above a.
+#
+# The mirror of _timer_range in panel/awg/validate.py, and it exists for the
+# same reason: `awg setconf` parses the AmneziaWG 3.0 timers with
+# u16_range_from_string, and the kernel calls u16_range_pick_one every time it
+# arms one - a fresh draw per event. A single number leaves the handshake
+# cadence, the one thing on the wire that no padding can disguise, strictly
+# periodic. What is drawn here is the range's position as well as its width,
+# because a range every install shares is a signature exactly the way a value
+# every install shares is one - the argument this whole file is built on.
+rand_range() {
+    local lo=$1 hi=$2 low
+    (( hi > lo )) || { printf '%s' "$lo"; return; }
+    low=$(rand_int "$lo" $(( hi - 1 )))
+    printf '%s-%s' "$low" "$(rand_int $(( low + 1 )) "$hi")"
+}
+
 # One of the arguments, chosen uniformly. Takes the elements rather than the
 # array's name: a nameref would read better here, but shellcheck cannot follow
 # one and reports every array assignment through it as a mistake.
@@ -463,7 +480,7 @@ awg_supports() {
 # only case that reaches it is an MTU high enough to leave S4 no room - which
 # --mtu allows and the panel does not.
 gen_advanced() {
-    local MARGIN
+    local MARGIN REJECT_LO REJECT_HI
     HPK=""; CPA=""
     REKEY_AFTER=""; REKEY_TIMEOUT=""; REJECT_AFTER=""
     KEEPALIVE_TIMEOUT=""; MAX_ATTEMPTS=""
@@ -496,10 +513,14 @@ gen_advanced() {
     # cannot parse, which `awg setconf` answers by refusing the whole file.
     if awg_supports rekey-after-time rekey_timeout reject_after_time \
                     keepalive_timeout max_handshake_attempts; then
-        REKEY_AFTER=$(rand_int "$OBFS_REKEY_AFTER_LO" "$OBFS_REKEY_AFTER_HI")
-        REKEY_TIMEOUT=$(rand_int "$OBFS_REKEY_TIMEOUT_LO" "$OBFS_REKEY_TIMEOUT_HI")
-        KEEPALIVE_TIMEOUT=$(rand_int "$OBFS_KEEPALIVE_LO" "$OBFS_KEEPALIVE_HI")
-        MAX_ATTEMPTS=$(rand_int "$OBFS_ATTEMPTS_LO" "$OBFS_ATTEMPTS_HI")
+        # Ranges rather than numbers - see rand_range. The kernel redraws inside
+        # each of these every time it arms the timer, so what a range costs is
+        # nothing and what it buys is that the handshake cadence stops being a
+        # constant an observer can measure off one flow.
+        REKEY_AFTER=$(rand_range "$OBFS_REKEY_AFTER_LO" "$OBFS_REKEY_AFTER_HI")
+        REKEY_TIMEOUT=$(rand_range "$OBFS_REKEY_TIMEOUT_LO" "$OBFS_REKEY_TIMEOUT_HI")
+        KEEPALIVE_TIMEOUT=$(rand_range "$OBFS_KEEPALIVE_LO" "$OBFS_KEEPALIVE_HI")
+        MAX_ATTEMPTS=$(rand_range "$OBFS_ATTEMPTS_LO" "$OBFS_ATTEMPTS_HI")
         # Derived, not drawn. A peer starts a new handshake at RekeyAfterTime and
         # may then wait KeepaliveTimeout + RekeyTimeout before it hears back, so
         # the three add up: a RejectAfterTime above only the largest of them can
@@ -508,14 +529,28 @@ gen_advanced() {
         # threshold first starts handshaking on top of the initiator - which
         # doubles the one event on the wire none of this can disguise.
         #
+        # With ranges the sum is taken from the *top* of each of the three and
+        # cleared by the *bottom* of the reject range, which is stricter than the
+        # kernel is: receive.c subtracts the bottom of keepalive and rekey-timeout
+        # rather than the top. Leaning on that would make the unluckiest draw in
+        # a few thousand a stalled tunnel on a server nobody is watching, and the
+        # room costs nothing.
+        #
         # The ceiling is folded into the same expression rather than tested
         # after it. A bare `(( ... )) && var=...` on the last line of a function
         # hands back the status of the test, and this one is false for every
         # draw the bands can produce - so the function returned 1, and the
         # installer runs under `set -e`.
         MARGIN=$(rand_int "$OBFS_MARGIN_LO" "$OBFS_MARGIN_HI")
-        REJECT_AFTER=$(( REKEY_AFTER + KEEPALIVE_TIMEOUT + REKEY_TIMEOUT + MARGIN ))
-        REJECT_AFTER=$(( REJECT_AFTER > OBFS_REJECT_MAX ? OBFS_REJECT_MAX : REJECT_AFTER ))
+        REJECT_LO=$(( ${REKEY_AFTER#*-} + ${KEEPALIVE_TIMEOUT#*-} + ${REKEY_TIMEOUT#*-} + MARGIN ))
+        REJECT_LO=$(( REJECT_LO > OBFS_REJECT_MAX ? OBFS_REJECT_MAX : REJECT_LO ))
+        MARGIN=$(rand_int "$OBFS_MARGIN_LO" "$OBFS_MARGIN_HI")
+        REJECT_HI=$(( REJECT_LO + MARGIN ))
+        REJECT_HI=$(( REJECT_HI > OBFS_REJECT_MAX ? OBFS_REJECT_MAX : REJECT_HI ))
+        # A width of zero is written as the single number it is, which is also
+        # what the panel emits and what `awg showconf` prints back.
+        REJECT_AFTER="$REJECT_LO"
+        (( REJECT_HI > REJECT_LO )) && REJECT_AFTER="${REJECT_LO}-${REJECT_HI}"
     fi
 }
 

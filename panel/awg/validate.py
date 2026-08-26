@@ -333,11 +333,17 @@ class AdvancedProfile:
     #: itself: the kernel picks a fresh value inside the range for every packet,
     #: and a range is the only shape of this setting that is worth writing.
     padding: tuple[int, int]
+    #: The four below are bands a *range* is drawn inside, not bands a value is
+    #: drawn from - see _timer_range. The kernel redraws each of these timers
+    #: every time it arms one, so a range is what turns a per-server constant
+    #: into per-event jitter, and the band is what keeps two servers from
+    #: writing the same range.
     rekey_after: tuple[int, int]
     rekey_timeout: tuple[int, int]
     keepalive: tuple[int, int]
     attempts: tuple[int, int]
     #: How far above the minimum the protocol allows RejectAfterTime is placed.
+    #: Drawn twice: once for the bottom of its range, once for the width.
     margin: tuple[int, int]
 
 
@@ -763,11 +769,27 @@ _SPECS: list[ParamSpec] = [
         max=JUNK_MAX,
         recommended="a range such as 32-96, drawn per server",
     ),
+    # The five timers below are ranges rather than plain numbers, and the whole
+    # of what that buys is on the wire. `awg setconf` parses each of them with
+    # u16_range_from_string, and the kernel calls u16_range_pick_one every time
+    # it arms the timer - a fresh draw per event, not one per server. A single
+    # number leaves the one thing no amount of padding can disguise, the cadence
+    # of the handshakes themselves, strictly periodic; a range makes it a
+    # distribution. A bare number is still accepted, because a hand-written
+    # awg0.conf full of them is a config the tools take and the interface comes
+    # up on.
+    #
+    # The ceilings are what they are for a reason worth writing down: these are
+    # u16 in the kernel, packed two to a u32, and the tools' parser never checks
+    # the high end against UINT16_MAX before truncating to it (type.c). So
+    # `RekeyAfterTime = 70000` is not refused, it is silently 4464, and the caps
+    # below are what stops a value from arriving on the wire as a number nobody
+    # chose.
     ParamSpec(
         key="RekeyAfterTime",
         group="advanced",
         label="Rekey after (seconds)",
-        kind="int",
+        kind="range",
         help_short="How long a session key is used before a new handshake starts. Needs 3.0 on both ends.",
         help_long=(
             "WireGuard renegotiates session keys every 120 seconds; this overrides that. "
@@ -775,7 +797,14 @@ _SPECS: list[ParamSpec] = [
             "trying to hide. Lengthening it keeps a key alive longer than the protocol was "
             "designed around. It has to stay well below RejectAfterTime or a key expires "
             "before its replacement is agreed and the tunnel stalls for a few seconds on every "
-            "cycle. The timer overrides are AmneziaWG 3.0 additions, and the Amnezia app's "
+            "cycle. "
+            "Give it a range such as 137-159 and the kernel draws a fresh number inside it "
+            "every time it asks - but expect less of the range here than on the other four. "
+            "The question is asked on every batch of packets sent rather than once a cycle, so "
+            "on a busy tunnel the first low draw wins and the rekey lands within seconds of the "
+            "bottom of the range; the spread only really shows on a quiet one. What a range "
+            "buys on any tunnel is that the bottom is not the same number on two servers. "
+            "The timer overrides are AmneziaWG 3.0 additions, and the Amnezia app's "
             "importer drops them besides, so a peer below 3.0, or one configured by importing "
             "a .conf, keeps the protocol's own defaults while the server does not."
         ),
@@ -783,13 +812,13 @@ _SPECS: list[ParamSpec] = [
         importer_safe=False,
         min=5,
         max=3600,
-        recommended="120",
+        recommended="a range such as 137-159, drawn per server",
     ),
     ParamSpec(
         key="RekeyTimeout",
         group="advanced",
         label="Handshake retry interval (seconds)",
-        kind="int",
+        kind="range",
         help_short="How long to wait for a handshake reply before retrying. Needs 3.0 on both ends.",
         help_long=(
             "After sending a handshake initiation a peer waits this long for the reply before "
@@ -797,28 +826,37 @@ _SPECS: list[ParamSpec] = [
             "regular and less chatty when a filter is dropping the first attempts; lowering it "
             "makes reconnects quicker at the cost of a burst that is easy to spot. Multiplied "
             "by the handshake attempt limit it decides how long a peer keeps trying before it "
-            "gives up and waits for new traffic. An AmneziaWG 3.0 setting, and one the app's "
+            "gives up and waits for new traffic. "
+            "This is one of the two timers a range genuinely jitters: the retransmit timer is "
+            "armed once per initiation with one fresh draw, so a range such as 5-6 makes the "
+            "retry burst a filter sees while it is dropping handshakes irregular rather than a "
+            "metronome. "
+            "An AmneziaWG 3.0 setting, and one the app's "
             ".conf importer drops besides, so a client below 3.0 keeps the default of 5."
         ),
         must_match_client=True,
         importer_safe=False,
         min=1,
         max=60,
-        recommended="5",
+        recommended="a range such as 5-6, drawn per server",
     ),
     ParamSpec(
         key="RejectAfterTime",
         group="advanced",
         label="Reject session after (seconds)",
-        kind="int",
+        kind="range",
         help_short="Hard expiry of a session key; nothing older is accepted. Needs 3.0 on both ends.",
         help_long=(
             "The absolute lifetime of a session key - after this many seconds it is refused "
             "even if a replacement handshake has not completed. The default is 180. It must "
             "stay larger than the rekey time plus a full retry cycle; the protocol requires it "
             "to exceed the keepalive timeout plus the handshake retry interval, and a value "
-            "that breaks that leaves the tunnel dropping traffic while it renegotiates. Both "
-            "ends should carry the same number, but only an AmneziaWG 3.0 client reads it at "
+            "that breaks that leaves the tunnel dropping traffic while it renegotiates. "
+            "A range works and the kernel draws inside it, but this is the one of the five not "
+            "to set by hand: it is derived from the other four rather than chosen, and the "
+            "bound it has to clear is the bottom of this range against the *top* of the rekey "
+            "range plus a whole retry cycle. Reconfigure computes it. "
+            "Both ends should carry the same number, but only an AmneziaWG 3.0 client reads it at "
             "all, and the app importer drops the line besides, so a peer below 3.0, or one "
             "configured by importing a .conf, will use 180 whatever is set here."
         ),
@@ -826,40 +864,48 @@ _SPECS: list[ParamSpec] = [
         importer_safe=False,
         min=10,
         max=7200,
-        recommended="180",
+        recommended="derived from the other four, not drawn",
     ),
     ParamSpec(
         key="KeepaliveTimeout",
         group="advanced",
         label="Keepalive timeout (seconds)",
-        kind="int",
+        kind="range",
         help_short="Idle time before a keepalive is overdue - not PersistentKeepalive. Needs 3.0 on both ends.",
         help_long=(
             "How long the protocol waits on an idle session before it expects to hear a "
             "keepalive; the default is 10 seconds. This is not the same setting as "
             "PersistentKeepalive, which is what a client sends to hold its NAT mapping open. "
             "Raising it cuts background chatter on a quiet link; lowering it notices a dead "
-            "peer sooner at the cost of more traffic. An AmneziaWG 3.0 setting that the app's "
+            "peer sooner at the cost of more traffic. "
+            "This is the timer a range buys the most on, because a keepalive is the other "
+            "strictly periodic thing on an idle wire and the kernel arms this one with a single "
+            "fresh draw each time. A range such as 9-13 turns that beat into a spread. Note "
+            "that the kernel reads the *bottom* of the range where it needs a safe bound and "
+            "the top where it needs a patient one, so both ends of what you write are used. "
+            "An AmneziaWG 3.0 setting that the app's "
             ".conf importer drops besides, so a peer below 3.0 keeps the default of 10."
         ),
         must_match_client=True,
         importer_safe=False,
         min=1,
         max=3600,
-        recommended="10",
+        recommended="a range such as 9-13, drawn per server",
     ),
     ParamSpec(
         key="MaxHandshakeAttempts",
         group="advanced",
         label="Handshake attempts",
-        kind="int",
+        kind="range",
         help_short="How many times a peer retries a handshake before giving up. Needs 3.0 on both ends.",
         help_long=(
             "A peer sends a handshake initiation, waits the retry interval, and tries again up "
             "to this many times before declaring the link dead and going quiet until there is "
             "new traffic to send; the default works out at 18 attempts. A higher number helps "
             "where the first attempts are being dropped deliberately, but a very high one "
-            "means a client that never stops probing a server that is gone. This is local "
+            "means a client that never stops probing a server that is gone. A range is drawn "
+            "afresh for each handshake the peer starts, so how long it keeps trying stops being "
+            "a constant an observer can measure by taking a server away. This is local "
             "retry behaviour, so the two ends do not have to agree - but only an AmneziaWG 3.0 "
             "client reads it, and the app importer drops it along with the rest of the timers."
         ),
@@ -867,7 +913,7 @@ _SPECS: list[ParamSpec] = [
         importer_safe=False,
         min=1,
         max=1000,
-        recommended="18",
+        recommended="a range such as 17-22, drawn per server",
     ),
     ParamSpec(
         key="RandomTrailers",
@@ -1154,6 +1200,20 @@ ADVANCED_PARAMS: tuple[str, ...] = tuple(
     key for key, spec in PARAMS.items() if spec.group == "advanced"
 )
 
+# The five timer overrides, which are one setting in five fields rather than
+# five settings. The kernel falls back to its own constant for any of them that
+# is missing, so a config carrying three of the five is one where the other two
+# were chosen by nobody - which is why the generators draw them as a set and the
+# cross-checks read them as a set. Named here because three callers had grown
+# their own copy of the list.
+TIMER_PARAMS: tuple[str, ...] = (
+    "RekeyAfterTime",
+    "RekeyTimeout",
+    "RejectAfterTime",
+    "KeepaliveTimeout",
+    "MaxHandshakeAttempts",
+)
+
 # Which controller feature flag has to be true before a parameter can be used.
 # H1-H4 are absent on purpose: a single value works on every module version and
 # only a lo-hi range needs the newer kernel, so that one is checked inline.
@@ -1421,6 +1481,14 @@ def randomize_advanced(
     bandwidth, and what "DPI-resistant" buys on this side is a handshake that
     happens less often rather than a fatter one.
 
+    The four drawn timers come back as ranges rather than numbers, because the
+    kernel calls u16_range_pick_one every time it arms one - a fresh value per
+    event, not per server. A single number leaves the handshake cadence, the one
+    thing on the wire that no amount of padding can disguise, strictly periodic;
+    a range makes it a distribution. The range is drawn inside the band rather
+    than being the band, so that two servers on the same profile do not write
+    the same two numbers - see _timer_range.
+
     Everything comes back as one consistent set, because these interlock.
     RejectAfterTime is derived rather than drawn: it has to outlast a whole
     rekey cycle, which is RekeyAfterTime plus the time the initiator may spend
@@ -1447,9 +1515,11 @@ def randomize_advanced(
     rng = rng or random.SystemRandom()
     band = ADVANCED_PROFILES.get(profile, _ADV_STANDARD)
 
-    rekey_after = rng.randint(*band.rekey_after)
-    rekey_timeout = rng.randint(*band.rekey_timeout)
-    keepalive = rng.randint(*band.keepalive)
+    rekey_after = _timer_range(rng, band.rekey_after)
+    rekey_timeout = _timer_range(rng, band.rekey_timeout)
+    keepalive = _timer_range(rng, band.keepalive)
+    attempts = _timer_range(rng, band.attempts)
+
     # The three add up rather than competing. A peer starts a new handshake at
     # RekeyAfterTime and may then wait KeepaliveTimeout + RekeyTimeout before it
     # hears back, so a RejectAfterTime above only the largest of them can still
@@ -1458,17 +1528,27 @@ def randomize_advanced(
     # gives up waiting and initiates itself - so a floor that leaves them out
     # puts the responder ahead of the initiator and doubles the handshakes,
     # which is the one event on the wire none of this can disguise.
-    floor = rekey_after + keepalive + rekey_timeout
-    reject_after = min(floor + rng.randint(*band.margin), PARAMS["RejectAfterTime"].max or 7200)
+    #
+    # With ranges the floor is taken from the *top* of each of the three, and
+    # what has to clear it is the *bottom* of the reject range. The kernel is
+    # less demanding than that - receive.c subtracts the bottom of keepalive and
+    # rekey-timeout rather than the top - but a derivation that leaned on that
+    # would be one where the unluckiest draw in a few thousand is a stalled
+    # tunnel, and nobody would ever catch it. Room is cheap here; the whole
+    # margin band is worth less than a second of traffic.
+    cap = PARAMS["RejectAfterTime"].max or 7200
+    floor = rekey_after[1] + keepalive[1] + rekey_timeout[1]
+    reject_lo = min(floor + rng.randint(*band.margin), cap)
+    reject_after = (reject_lo, min(reject_lo + rng.randint(*band.margin), cap))
 
     return {
         "HeaderProtectionKey": _header_protection_key(rng),
         "ContentPaddingAddition": _content_padding(rng, band),
-        "RekeyAfterTime": str(rekey_after),
-        "RekeyTimeout": str(rekey_timeout),
-        "RejectAfterTime": str(reject_after),
-        "KeepaliveTimeout": str(keepalive),
-        "MaxHandshakeAttempts": str(rng.randint(*band.attempts)),
+        "RekeyAfterTime": _fmt_range(rekey_after),
+        "RekeyTimeout": _fmt_range(rekey_timeout),
+        "RejectAfterTime": _fmt_range(reject_after),
+        "KeepaliveTimeout": _fmt_range(keepalive),
+        "MaxHandshakeAttempts": _fmt_range(attempts),
         # Empty rather than "off": empty is how a save removes the line, and the
         # line the kernel never sees is the one that cannot disagree with a peer.
         "RandomTrailers": "",
@@ -1500,6 +1580,28 @@ def _header_protection_key(rng: random.Random) -> str:
     which is the same CSPRNG os.urandom reads from.
     """
     return base64.b64encode(bytes(rng.randrange(256) for _ in range(32))).decode("ascii")
+
+
+def _timer_range(rng: random.Random, band: tuple[int, int]) -> tuple[int, int]:
+    """A sub-interval of `band`, as (lo, hi), with hi strictly above lo.
+
+    The band is not the range. Writing the band itself would hand every server
+    on a profile the same two numbers, and a range every server shares is a
+    signature exactly the way a value every server shares is one - which is the
+    argument PROFILES and ADVANCED_PROFILES are built on, and the reason
+    `recommended` names a band rather than a number. So the position inside the
+    band is drawn as well as the width: lo anywhere below the top, hi anywhere
+    above lo.
+
+    hi is strictly above lo rather than possibly equal to it. A range that
+    collapsed to a point is the constant this whole shape exists to avoid,
+    arrived at by accident on one server in every few.
+    """
+    low, high = band
+    if high <= low:
+        return low, high
+    lo = rng.randint(low, high - 1)
+    return lo, rng.randint(lo + 1, high)
 
 
 def _content_padding(rng: random.Random, band: AdvancedProfile) -> str:
@@ -1870,6 +1972,25 @@ def _set_int(values: dict[str, str], key: str) -> int | None:
     return int(value)
 
 
+def _set_range(values: dict[str, str], key: str) -> tuple[int, int] | None:
+    """(lo, hi) of a parameter that is present, switched on and well formed.
+
+    The range-shaped _set_int, and the reason it exists rather than the timer
+    checks below simply calling that one: every timer is kind="range" now, and
+    _set_int returns None for anything with a dash in it. Left alone it would
+    have made _check_timers quietly stop checking the moment an admin wrote the
+    range this module now recommends - a save silently dropping its own safety
+    net on exactly the configurations that need it.
+
+    A bare number comes back as a range of width zero, which is what it is.
+    """
+    spec = PARAMS.get(key)
+    value = _get(values, key)
+    if spec is None or not _is_set(spec, value):
+        return None
+    return _parse_range(value)
+
+
 def _count_lines(value: str) -> int:
     return len([line for line in value.splitlines() if line.strip()])
 
@@ -1943,17 +2064,21 @@ def _check_int(spec: ParamSpec, value: str) -> str | None:
 
 
 def _check_range(spec: ParamSpec, value: str) -> str | None:
+    # The bounds are read first so the malformed-value message can quote them.
+    # It used to name a range out of H1-H4's span, which was the only kind of
+    # range there was; the five timers arriving on this path made that example
+    # a number the same message would go on to reject.
+    lowest = spec.min if spec.min is not None else H_MIN
+    highest = spec.max if spec.max is not None else H_MAX
     parsed = _parse_range(value)
     if parsed is None:
         return (
-            f"'{value}' is neither a number nor a range. Use a single value such as 12345, or "
-            "a range such as 5-500000000."
+            f"'{value}' is neither a number nor a range. Use a single value such as "
+            f"{lowest}, or a range such as {lowest}-{highest}."
         )
     low, high = parsed
     if low > high:
         return f"The range runs backwards: {low} is larger than {high}."
-    lowest = spec.min if spec.min is not None else H_MIN
-    highest = spec.max if spec.max is not None else H_MAX
     if low < lowest or high > highest:
         return f"Values must be between {lowest} and {highest}."
     return None
@@ -2325,27 +2450,82 @@ def _check_headers(values: dict[str, str], errors: dict[str, str], add) -> None:
 
 
 def _check_timers(values: dict[str, str], errors: dict[str, str], add) -> None:
-    rekey_after = _set_int(values, "RekeyAfterTime")
-    reject_after = _set_int(values, "RejectAfterTime")
-    rekey_timeout = _set_int(values, "RekeyTimeout")
-    keepalive = _set_int(values, "KeepaliveTimeout")
+    """The three bounds the five timers have to keep between them.
 
-    fixable = reject_after is not None and "RejectAfterTime" not in errors
-    if fixable and rekey_after and rekey_after >= reject_after:
+    Each is read against the end of the range the kernel itself reads, and that
+    is not always the same end. Most timers are armed with u16_range_pick_one,
+    but where a bound has to hold for every draw the kernel takes one on
+    purpose: the responder's key-fresh threshold is
+    `pick_one(reject) - lo(keepalive) - lo(rekey_timeout)` in receive.c, and
+    wg_timers_data_sent waits `hi(keepalive) + pick_one(rekey_timeout)` in
+    timers.c. So the check has to be made against the worst draw the ranges
+    allow rather than a typical one: anything else passes a configuration whose
+    unluckiest cycle in a few thousand stalls the tunnel, which is the kind of
+    fault nobody ever traces back to this page.
+
+    A parameter that already has an error of its own is left out of the
+    arithmetic rather than fed into it. Its value is not a number anyone chose,
+    and reporting a second failure derived from it buries the one that is
+    actionable.
+    """
+
+    def ends(key: str) -> tuple[int, int] | None:
+        return None if key in errors else _set_range(values, key)
+
+    rekey_after = ends("RekeyAfterTime")
+    reject_after = ends("RejectAfterTime")
+    rekey_timeout = ends("RekeyTimeout")
+    keepalive = ends("KeepaliveTimeout")
+
+    if reject_after is None:
+        return
+    reject_lo = reject_after[0]
+
+    # Against the top of the rekey range, not its middle. The draw that lands
+    # highest is the one that expires a key before its replacement lands, and it
+    # is the only draw whose behaviour anyone would notice.
+    if rekey_after is not None and reject_lo <= rekey_after[1]:
         add(
             "RejectAfterTime",
-            f"RejectAfterTime ({reject_after}s) must be longer than RekeyAfterTime "
-            f"({rekey_after}s), or a key expires before its replacement has been agreed and "
-            "the tunnel stalls on every cycle.",
+            f"RejectAfterTime ({_fmt_range(reject_after)}) must be longer than RekeyAfterTime "
+            f"({_fmt_range(rekey_after)}), and the comparison is the bottom of the first "
+            "against the top of the second - the kernel draws a fresh value inside each range "
+            "every cycle. Otherwise a key expires before its replacement has been agreed and "
+            "the tunnel stalls on that cycle.",
         )
         return
 
-    if fixable and rekey_timeout and keepalive and reject_after <= keepalive + rekey_timeout:
+    if rekey_timeout is None or keepalive is None:
+        return
+
+    # receive.c computes exactly this subtraction, into a signed int, on every
+    # data packet a responder decrypts. Take it below zero and the responder
+    # decides its key is stale every time it hears anything, which is a handshake
+    # storm rather than a stall.
+    cycle = keepalive[0] + rekey_timeout[0]
+    if reject_lo <= cycle:
         add(
             "RejectAfterTime",
             f"RejectAfterTime must be greater than KeepaliveTimeout + RekeyTimeout "
-            f"({keepalive} + {rekey_timeout} = {keepalive + rekey_timeout}s); the protocol "
-            "relies on that gap to renegotiate without dropping traffic.",
+            f"({keepalive[0]} + {rekey_timeout[0]} = {cycle}s, taken from the bottom of each "
+            "range because that is the end the kernel subtracts); the protocol relies on that "
+            "gap to renegotiate without dropping traffic.",
+        )
+        return
+
+    # The far end measures its own key against RejectAfterTime minus that wait,
+    # and a responder that reaches the threshold first starts handshaking on top
+    # of the initiator. That does not break the tunnel, which is why it went
+    # unchecked for so long - it just doubles the one event on the wire that
+    # none of this can disguise.
+    if rekey_after is not None and reject_lo - cycle <= rekey_after[1]:
+        add(
+            "RejectAfterTime",
+            f"RejectAfterTime needs another {rekey_after[1] - (reject_lo - cycle) + 1}s at the "
+            f"bottom of its range. The responder starts its own handshake at RejectAfterTime "
+            f"minus KeepaliveTimeout + RekeyTimeout ({reject_lo} - {cycle} = {reject_lo - cycle}"
+            f"s), and that has to stay above the initiator's RekeyAfterTime "
+            f"({rekey_after[1]}s) or both ends handshake every cycle instead of one.",
         )
 
 

@@ -782,8 +782,8 @@ the advanced group below them:
     "I4": "", "I5": "",
     "HeaderProtectionKey": "xYbOANvXjB9HdbfeC92cefXNNd8U2iIXtvmnHMogkCs=",
     "ContentPaddingAddition": "12-64",
-    "RekeyAfterTime": "163", "RekeyTimeout": "7", "RejectAfterTime": "293",
-    "KeepaliveTimeout": "11", "MaxHandshakeAttempts": "24",
+    "RekeyAfterTime": "140-150", "RekeyTimeout": "5-6", "RejectAfterTime": "305-372",
+    "KeepaliveTimeout": "8-15", "MaxHandshakeAttempts": "17-20",
     "RandomTrailers": ""
   },
   "warnings": []
@@ -810,10 +810,21 @@ packet larger however wide the range is.
 Every draw also stays at or above 12 bytes on `S1`–`S4`, which is what a header
 protection key needs (see below).
 
+The five timers come back as `lo-hi` ranges rather than numbers. `awg setconf`
+parses them with `u16_range_from_string` and the kernel redraws inside the range
+every time it arms the timer, so a range makes the handshake cadence — the one
+feature that survives every byte-level disguise — a distribution instead of a
+constant. A plain number is still accepted on `PUT api/v1/server`: it is what
+every server installed before this wrote, and what `awg showconf` prints back for
+a range of width zero.
+
 The advanced half is drawn as one consistent set — `RejectAfterTime` is derived
-rather than drawn, because it has to outlast a whole rekey cycle:
-`RekeyAfterTime` plus the `KeepaliveTimeout` + `RekeyTimeout` a peer may spend
-waiting for the answer. Every value in it needs AmneziaWG 3.0 at the far end,
+rather than drawn, because it has to outlast a whole rekey cycle: the **top** of
+`RekeyAfterTime` plus the tops of the `KeepaliveTimeout` + `RekeyTimeout` a peer
+may spend waiting for the answer, cleared by the **bottom** of its own range.
+`PUT api/v1/server` enforces the same three bounds against the same ends, so a
+set assembled by a caller is held to the worst draw the ranges allow rather than
+a typical one. Every value in it needs AmneziaWG 3.0 at the far end,
 which is what a current client is; a parameter the installed module cannot do
 comes back empty with a sentence saying so, rather than producing a set that
 `PUT api/v1/server` would then reject.

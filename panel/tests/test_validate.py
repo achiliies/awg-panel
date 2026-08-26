@@ -699,18 +699,136 @@ def test_advanced_timers_leave_room_to_renegotiate(profile):
     interlock, and they add up rather than competing: a peer rekeys at
     RekeyAfterTime and may then wait a keepalive and a retry before it hears
     back, so a key that expires above only the largest of the three can still go
-    before the handshake replacing it lands."""
+    before the handshake replacing it lands.
+
+    With ranges the question is asked of the worst draw rather than a typical
+    one. The kernel picks a fresh value inside each range every time it arms the
+    timer, so a set that holds on average is a set that stalls the tunnel on the
+    unluckiest cycle in a few thousand - which is exactly the kind of fault that
+    never gets traced back to here.
+    """
     for _ in range(ROUNDS):
         values = validate.randomize_advanced(profile=profile)
-        reject = int(values["RejectAfterTime"])
-        rekey = int(values["RekeyAfterTime"])
-        cycle = int(values["KeepaliveTimeout"]) + int(values["RekeyTimeout"])
-        assert reject > rekey + cycle, values
+        reject = validate._parse_range(values["RejectAfterTime"])
+        rekey = validate._parse_range(values["RekeyAfterTime"])
+        cycle_hi = (
+            validate._parse_range(values["KeepaliveTimeout"])[1]
+            + validate._parse_range(values["RekeyTimeout"])[1]
+        )
+        cycle_lo = (
+            validate._parse_range(values["KeepaliveTimeout"])[0]
+            + validate._parse_range(values["RekeyTimeout"])[0]
+        )
+        assert reject[0] > rekey[1] + cycle_hi, values
         # The far end measures its own key against RejectAfterTime minus that
         # wait, and a responder that reaches it first starts handshaking on top
         # of the initiator - twice the handshakes, which is the one event on the
-        # wire that none of this can disguise.
-        assert reject - cycle > rekey, values
+        # wire that none of this can disguise. receive.c subtracts the *bottom*
+        # of the two waits, so that is the end this is asked of.
+        assert reject[0] - cycle_lo > rekey[1], values
+
+
+@pytest.mark.parametrize("profile", PROFILE_KEYS)
+def test_advanced_timers_are_ranges_rather_than_numbers(profile):
+    """The whole of what this change buys is that the kernel has something to
+    draw from. u16_range_pick_one runs every time a timer is armed, so a range
+    turns the handshake cadence - the one event on the wire that no amount of
+    padding can disguise - from a constant into a distribution. A generator that
+    quietly went back to single values would still validate, and every server
+    would still differ from every other; each one would just be a metronome
+    again."""
+    for _ in range(ROUNDS):
+        values = validate.randomize_advanced(profile=profile)
+        for key in validate.TIMER_PARAMS:
+            low, high = validate._parse_range(values[key])
+            assert high > low, f"{key} came back as a single value: {values[key]}"
+
+
+@pytest.mark.parametrize("profile", PROFILE_KEYS)
+def test_advanced_timer_ranges_are_not_the_band(profile):
+    """A range every server shares is a signature exactly the way a value every
+    server shares is one. The band is what the range is drawn *inside*, so both
+    where a server's range sits and how wide it is have to vary - emitting the
+    band itself would trade a per-server constant for a per-profile one."""
+    drawn = {validate.randomize_advanced(profile=profile)["RekeyAfterTime"] for _ in range(200)}
+    ends = [validate._parse_range(value) for value in drawn]
+    assert len({low for low, _ in ends}) > 5, drawn
+    assert len({high - low for low, high in ends}) > 3, drawn
+
+
+# --------------------------------------------------------- timer cross-checks
+
+
+def test_timers_still_accept_the_single_values_already_in_the_field():
+    """Every server installed before this was a range wrote plain numbers, and
+    they are still what `awg showconf` prints for a range of width zero. A
+    validator that started refusing them would reject every unrelated save on
+    those servers, because the merged set is what each save is checked against.
+    """
+    assert (
+        check(
+            {
+                "RekeyAfterTime": "120",
+                "RekeyTimeout": "5",
+                "RejectAfterTime": "180",
+                "KeepaliveTimeout": "10",
+                "MaxHandshakeAttempts": "18",
+            }
+        )
+        == {}
+    )
+
+
+def test_reject_after_time_is_measured_against_the_top_of_the_rekey_range():
+    """180 is inside 120-180, so the draw that lands there expires a key at the
+    same moment its replacement is due. Comparing the bottoms would pass this."""
+    errors = check(
+        {"RekeyAfterTime": "120-180", "RejectAfterTime": "175-400", "RekeyTimeout": "4-7"}
+    )
+    assert "must be longer than RekeyAfterTime" in errors["RejectAfterTime"]
+
+
+def test_reject_after_time_is_measured_against_the_bottom_of_the_waits():
+    """receive.c computes reject - lo(keepalive) - lo(rekey_timeout) into a
+    signed int on every packet a responder decrypts. Below zero is not a stall,
+    it is a responder that decides its key is stale every time it hears
+    anything."""
+    errors = check(
+        {"RejectAfterTime": "25-40", "KeepaliveTimeout": "20-30", "RekeyTimeout": "20-30"}
+    )
+    assert "KeepaliveTimeout + RekeyTimeout" in errors["RejectAfterTime"]
+
+
+def test_the_responder_has_to_stay_behind_the_initiator():
+    """The one bound that was a comment rather than a check. It does not break
+    the tunnel, which is why it survived as prose - it just doubles the one
+    event on the wire that none of this can disguise."""
+    errors = check(
+        {
+            "RekeyAfterTime": "120-180",
+            "RejectAfterTime": "190-400",
+            "RekeyTimeout": "4-7",
+            "KeepaliveTimeout": "8-15",
+        }
+    )
+    assert "both ends handshake every cycle" in errors["RejectAfterTime"]
+
+
+def test_a_timer_with_an_error_of_its_own_is_left_out_of_the_arithmetic():
+    """Its value is not a number anyone chose. Reporting a second failure
+    derived from it buries the one the admin can act on."""
+    errors = check({"RekeyAfterTime": "nonsense", "RejectAfterTime": "180"})
+    assert set(errors) == {"RekeyAfterTime"}
+
+
+@pytest.mark.parametrize("key", validate.TIMER_PARAMS)
+def test_a_timer_range_cannot_exceed_what_the_kernel_stores(key):
+    """These are u16 in the kernel, packed two to a u32, and the tools' parser
+    truncates to that without checking - `RekeyAfterTime = 70000` is not
+    refused, it is silently 4464. The per-parameter caps are what stops a value
+    arriving on the wire that nobody chose."""
+    assert validate.PARAMS[key].max <= 65535
+    assert key in check({key: f"1-{validate.PARAMS[key].max + 1}"})
 
 
 @pytest.mark.parametrize("profile", PROFILE_KEYS)

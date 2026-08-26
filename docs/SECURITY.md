@@ -262,6 +262,15 @@ protocol's defaults and the tunnel still works, but only the end that has them
 set is hiding anything. The panel marks these fields accordingly and leaves them
 unset unless an admin turns them on deliberately.
 
+The timers are written as `lo-hi` ranges, which the kernel redraws inside every
+time it arms one. That is aimed at a specific attack: handshake cadence is the
+one feature of a flow that no amount of junk, padding or header randomisation
+touches, and drawing a timer per server does not defeat it — periodicity
+detection does not need to know the period. Drawing per event does. The gain is
+uneven across the five and smallest on `RekeyAfterTime`, for reasons set out in
+[docs/PANEL.md](PANEL.md#the-advanced-group); none of it is a substitute for the
+rest of the profile.
+
 ## Reporting a problem
 
 **A vulnerability goes to [Security → Report a vulnerability][advisory], not to

@@ -838,7 +838,7 @@ CATALOG: tuple[Op, ...] = (
                 "I4": "",
                 "HeaderProtectionKey": "xYbOANvXjB9HdbfeC92cefXNNd8U2iIXtvmnHMogkCs=",
                 "ContentPaddingAddition": "12-64",
-                "RekeyAfterTime": "163",
+                "RekeyAfterTime": "140-150",
                 "RandomTrailers": "",
             },
             "warnings": [],
