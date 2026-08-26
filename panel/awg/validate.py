@@ -1811,8 +1811,40 @@ def _is_set(spec: ParamSpec, value: str) -> bool:
     if not text:
         return False
     if spec.kind == "bool":
-        return text.lower() != "off"
+        # A switch has two spellings of off and _bool_state knows both. None is
+        # a value the tools cannot read at all, and that has to count as set so
+        # that _check_bool is reached and says so, rather than being skipped
+        # here and leaving the page silent about a line that stops the bring-up.
+        return _bool_state(text) is not False
     return not (spec.group in _OFF_MEANS_UNSET and text == "0")
+
+
+def _bool_state(text: str) -> bool | None:
+    """What the tools' `parse_bool` would make of a switch: on, off, or neither.
+
+    Not the two words alone, which is what this module assumed until the source
+    was read: config.c takes "on" and "off" through strcasecmp and then accepts
+    anything that parses as a plain number, where zero is off and everything
+    else is on. So a hand-written `RandomTrailers = 0` is a config the tools
+    take and the interface comes up on, and a panel that called it malformed was
+    inventing a rule and then refusing every unrelated save on the strength of
+    it - the value is in the merged set every save is validated against.
+
+    None is for what parse_bool really does refuse: a value that does not begin
+    with a digit. A number with anything after it - "0x10" - is worse than
+    refused, because the tool prints and exits halfway through reading the
+    config, so it is None here too. The digits are held to ASCII because
+    strtoul is: str.isdigit() alone would accept a superscript two that no C
+    library will read.
+    """
+    lowered = text.lower()
+    if lowered == "off":
+        return False
+    if lowered == "on":
+        return True
+    if not (text.isascii() and text.isdigit()):
+        return None
+    return int(text) != 0
 
 
 def is_set(key: str, value: str) -> bool:
@@ -1883,18 +1915,23 @@ def _check_value(spec: ParamSpec, value: str) -> str | None:
 
 
 def _check_bool(value: str) -> str | None:
-    """The two words `awg setconf` parses for a switch.
+    """Whether `awg setconf` could read this switch at all.
 
-    Both of them, though only one arrives: _check_value is reached only for a
-    value _is_set called set, and that reads "off" as unset. So a config that
-    says "off" in words - one an admin wrote by hand - is skipped rather than
-    checked, and saves for that reason rather than this one. "off" is named
-    here anyway so the answer does not depend on which caller asks: this
-    function is about what the tool parses, not about what the panel writes.
+    Both spellings of off get here only in theory: _check_value is reached only
+    for a value _is_set called set, and that reads "off" and "0" alike as unset.
+    So a config that says off either way - one an admin wrote by hand - is
+    skipped rather than checked, and saves for that reason rather than this one.
+    The question is asked of _bool_state anyway so the answer does not depend on
+    which caller asks: this function is about what the tool parses, not about
+    what the panel writes.
+
+    The message still names the two words, because they are what the panel
+    writes and what an admin should type. A number is accepted rather than
+    recommended.
     """
-    if value.strip().lower() in ("on", "off"):
-        return None
-    return "Use on or off, or leave it empty to leave the line out of the config."
+    if _bool_state(value.strip()) is None:
+        return "Use on or off, or leave it empty to leave the line out of the config."
+    return None
 
 
 def _check_int(spec: ParamSpec, value: str) -> str | None:

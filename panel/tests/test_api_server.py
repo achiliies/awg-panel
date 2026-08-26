@@ -141,6 +141,30 @@ def test_a_bad_parameter_is_rejected_with_the_field_named(api, server_conf, serv
     assert server_conf.read_text(encoding="utf-8") == server_conf_text
 
 
+@pytest.mark.parametrize("key", ["RandomTrailers", "DisableCookies"])
+def test_a_switch_written_as_a_number_does_not_jam_every_other_save(api, server_conf, key):
+    """A save validates the whole merged config, not the fields in the payload,
+    so one value the panel calls malformed stops every unrelated save with an
+    error on a field the admin never touched - and the only way out is an editor
+    on the server, which is where the value came from.
+
+    The tools take a number for a switch: parse_bool reads on and off as words
+    and then anything that parses as one, zero being off. So `= 0` is a config
+    they accept, the interface is up on it, and the panel refusing it was the
+    panel's own rule. Both switches, because the rule is on the kind and a third
+    one would inherit it.
+    """
+    text = server_conf.read_text(encoding="utf-8")
+    server_conf.write_text(text.replace("Jc = 4", f"Jc = 4\n{key} = 0"), encoding="utf-8")
+
+    response = api.put(api_url("server"), {"params": {"Jmin": "50"}}, format="json")
+
+    assert response.status_code == 200, response.content
+    assert interface_value(server_conf, "Jmin") == "50"
+    # Read as off, so it says nothing about a protection that is not switched off.
+    assert not [text for text in response.json()["warnings"] if key in text]
+
+
 def test_a_server_only_change_restarts_but_asks_nobody_to_reimport(api, server_conf, conf_dir):
     """DisableCookies is an [Interface] value, so the tunnel has to come back for
     it - but it appears in no client config, so telling the fleet to re-import

@@ -847,19 +847,31 @@ def test_random_trailers_off_and_empty_read_as_unset(value):
     ]
 
 
-@pytest.mark.parametrize("value", ["yes", "true", "1", "0", "invalid", "enabled"])
-def test_random_trailers_rejects_unrecognized_values(value):
-    """awg setconf only understands on/off; anything else in the config would cause
-    the interface bring-up to fail.
+@pytest.mark.parametrize("value", ["yes", "true", "invalid", "enabled", "0x10", "-1"])
+def test_random_trailers_rejects_what_the_tools_cannot_read(value):
+    """A value parse_bool refuses is a config the interface will not come up on,
+    and the page has to say so rather than skip the line.
 
-    "0" among them: parse_bool compares against on and off with strcasecmp and
-    takes nothing else, so a hand-written `RandomTrailers = 0` is a config the
-    tools refuse. Reading it as unset would leave the settings page with nothing
-    to say about a line that stops the interface coming up.
+    Not everything that is not a word, though - see below. "0x10" is here
+    because it is worse than refused: the tool reads the leading zero, finds
+    the x, and exits in the middle of parsing the config.
     """
     errors = check({"RandomTrailers": value})
     assert "RandomTrailers" in errors
     assert "Use on or off" in errors["RandomTrailers"]
+
+
+@pytest.mark.parametrize("value, on", [("0", False), ("00", False), ("1", True), ("5", True)])
+def test_a_switch_reads_a_number_the_way_the_tools_do(value, on):
+    """parse_bool takes on and off through strcasecmp and then anything that
+    parses as a plain number, zero being off. The panel used to refuse the
+    numbers, which made a hand-written `RandomTrailers = 0` - a config the
+    tools accept and bring the interface up on - reject every unrelated save,
+    because the value is in the merged set each save is validated against.
+    """
+    assert check({"RandomTrailers": value}) == {}
+    assert validate._is_set(validate.PARAMS["RandomTrailers"], value) is on
+    assert validate.is_set("RandomTrailers", value) is on
 
 
 @pytest.mark.parametrize("key", ["Jc", "S1", "H1", "I1", "HeaderProtectionKey", "RekeyAfterTime"])
@@ -921,10 +933,10 @@ def test_disable_cookies_accepts_on_and_reads_off_as_unset():
     assert check({"DisableCookies": "off"}) == {}
 
 
-@pytest.mark.parametrize("value", ["yes", "true", "1", "0", "disabled"])
-def test_disable_cookies_rejects_unrecognized_values(value):
-    """parse_bool takes on and off and nothing else; anything here stops the
-    interface coming back up."""
+@pytest.mark.parametrize("value", ["yes", "true", "disabled"])
+def test_disable_cookies_rejects_what_the_tools_cannot_read(value):
+    """What parse_bool refuses, the interface does not come back up on. The
+    numbers it does take are held one test up, with the other switch."""
     errors = check({"DisableCookies": value})
     assert "DisableCookies" in errors
     assert "Use on or off" in errors["DisableCookies"]
@@ -997,14 +1009,15 @@ def test_is_set_delegates_to_the_private_helper_for_known_parameters(key, value,
     assert validate.is_set(key, value) is expected
 
 
-def test_is_set_treats_zero_as_set_for_random_trailers():
-    """A switch rule is on the kind rather than on the group, so "0" is set.
+def test_is_set_treats_zero_as_off_for_a_switch():
+    """ "0" is one of the two spellings of off, so nothing is written for it.
 
-    parse_bool only understands "on" and "off" and refuses "0", so the tools
-    refuse that config rather than skipping the line. Treating "0" as unset
-    would silently omit a line that breaks interface bring-up.
+    The rule is still on the kind rather than on the group - a switch says off
+    in a word as well, which no number group does - but the answer for "0" is
+    the same either way, because parse_bool reads a number and calls zero off.
     """
-    assert validate.is_set("RandomTrailers", "0") is True
+    assert validate.is_set("RandomTrailers", "0") is False
+    assert validate.is_set("DisableCookies", "0") is False
 
 
 @pytest.mark.parametrize(
@@ -1030,13 +1043,11 @@ def test_is_set_falls_back_to_emptiness_for_unknown_keys(value, expected):
 def test_is_set_agrees_with_client_conf_emission_needs(key):
     """_emit_client_conf relies on is_set to omit unconfigured settings.
 
-    For every key in AWG_PARAMS, an empty value is omitted and a value of "0"
-    is omitted as well, except for RandomTrailers where "0" is not "off" and
-    must not be dropped. Parametrizing over AWG_PARAMS ensures any future
-    obfuscation parameter joins this guarantee automatically.
+    For every key in AWG_PARAMS, an empty value is omitted and a value of "0" is
+    omitted with it - for the numbers because "0" is how the config spells off,
+    and for a switch because parse_bool reads the same number the same way.
+    Parametrizing over AWG_PARAMS ensures any future obfuscation parameter joins
+    this guarantee automatically.
     """
     assert validate.is_set(key, "") is False
-    if key == "RandomTrailers":
-        assert validate.is_set(key, "0") is True
-    else:
-        assert validate.is_set(key, "0") is False
+    assert validate.is_set(key, "0") is False
