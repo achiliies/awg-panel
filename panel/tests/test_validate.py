@@ -814,6 +814,40 @@ def test_the_responder_has_to_stay_behind_the_initiator():
     assert "both ends handshake every cycle" in errors["RejectAfterTime"]
 
 
+def test_the_initiators_key_has_to_outlast_its_own_negotiation():
+    """The bound randomize_advanced derives RejectAfterTime from, asked of a set
+    typed in by hand. wg_timers_data_sent waits hi(keepalive) +
+    pick_one(rekey_timeout), so a peer rekeying at the top of 120-180 can be
+    202s in before it hears back - and a RejectAfterTime whose bottom is 200
+    expires the key while the handshake replacing it is still in flight.
+
+    It clears every other bound: 200 is above the top of the rekey range, above
+    the waits, and above the responder's threshold, which reads the *bottoms* of
+    those waits. Only this one, which reads the tops, catches it."""
+    values = {
+        "RekeyAfterTime": "120-180",
+        "KeepaliveTimeout": "8-15",
+        "RekeyTimeout": "4-7",
+        "RejectAfterTime": "200-260",
+    }
+    errors = check(values)
+    assert "expires a key mid-negotiation" in errors["RejectAfterTime"]
+    # The message names what it would take, so acting on it has to be enough.
+    assert check({**values, "RejectAfterTime": "203-260"}) == {}
+
+
+@pytest.mark.parametrize("key", ["H1", *validate.TIMER_PARAMS])
+def test_a_range_with_a_space_in_it_is_refused(key):
+    """`awg setconf` reads the low end with strtoul and then insists the next
+    byte is the dash, so `120 - 180` is a line it cannot parse - and it answers
+    one of those by refusing the whole file, which is an interface that does not
+    come up. A validator that took what the tools reject is worse than one that
+    is merely strict."""
+    low = validate.PARAMS[key].min
+    assert key in check({key: f"{low} - {low + 1}"})
+    assert check({key: f"{low}-{low + 1}"}).get(key) is None
+
+
 def test_a_timer_with_an_error_of_its_own_is_left_out_of_the_arithmetic():
     """Its value is not a number anyone chose. Reporting a second failure
     derived from it buries the one the admin can act on."""

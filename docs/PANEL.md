@@ -863,9 +863,9 @@ by the **bottom** of the reject range. The kernel is less demanding — `receive
 subtracts the bottoms of `KeepaliveTimeout` and `RekeyTimeout` rather than the
 tops — but a derivation that leaned on that would make the unluckiest draw in a
 few thousand a stalled tunnel on a server nobody is watching, and the room costs
-nothing. The save bar checks the same three bounds against the same ends, so a
-set typed in by hand is held to what the kernel will actually do with it rather
-than to what it does on average.
+nothing. The save bar checks that same bound at those same ends, so a set
+typed in by hand is held to what the kernel will actually do with it rather than
+to what it does on average.
 
 The ceilings on these fields are not cosmetic. The kernel stores each range as
 two `u16` packed into a `u32`, and the tools' parser truncates to that without

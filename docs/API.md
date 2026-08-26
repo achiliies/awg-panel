@@ -822,9 +822,9 @@ The advanced half is drawn as one consistent set — `RejectAfterTime` is derive
 rather than drawn, because it has to outlast a whole rekey cycle: the **top** of
 `RekeyAfterTime` plus the tops of the `KeepaliveTimeout` + `RekeyTimeout` a peer
 may spend waiting for the answer, cleared by the **bottom** of its own range.
-`PUT api/v1/server` enforces the same three bounds against the same ends, so a
-set assembled by a caller is held to the worst draw the ranges allow rather than
-a typical one. Every value in it needs AmneziaWG 3.0 at the far end,
+`PUT api/v1/server` enforces that same bound at those same ends, so a set
+assembled by a caller is held to the worst draw the ranges allow rather than a
+typical one. Every value in it needs AmneziaWG 3.0 at the far end,
 which is what a current client is; a parameter the installed module cannot do
 comes back empty with a sentence saying so, rather than producing a set that
 `PUT api/v1/server` would then reject.

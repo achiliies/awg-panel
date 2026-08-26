@@ -549,8 +549,19 @@ gen_advanced() {
         REJECT_HI=$(( REJECT_HI > OBFS_REJECT_MAX ? OBFS_REJECT_MAX : REJECT_HI ))
         # A width of zero is written as the single number it is, which is also
         # what the panel emits and what `awg showconf` prints back.
-        REJECT_AFTER="$REJECT_LO"
-        (( REJECT_HI > REJECT_LO )) && REJECT_AFTER="${REJECT_LO}-${REJECT_HI}"
+        #
+        # An if/else rather than `(( ... )) && var=...` for the same reason the
+        # ceiling above is folded into its own expression: this is the last
+        # statement of the function, a bare test-and-assign hands back the status
+        # of the test, and the installer runs under `set -e`. The false branch is
+        # unreachable with the bands above - OBFS_MARGIN_LO is 60 and REJECT_LO
+        # tops out at 382 against a ceiling of 7200 - which is exactly what makes
+        # it worth writing so that it stays unreachable if a band moves.
+        if (( REJECT_HI > REJECT_LO )); then
+            REJECT_AFTER="${REJECT_LO}-${REJECT_HI}"
+        else
+            REJECT_AFTER="$REJECT_LO"
+        fi
     fi
 }
 

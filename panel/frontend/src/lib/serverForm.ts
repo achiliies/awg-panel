@@ -4,6 +4,7 @@ import type { TFunction } from "i18next";
 
 import { useToast } from "@/components/ui/toast";
 import { useSaveServer, useServer, useServerParams } from "@/api/hooks";
+import { rangeBounds } from "@/lib/paramText";
 import { usePendingIndicator } from "@/lib/pending";
 import { useReveal } from "@/lib/reveal";
 import type {
@@ -206,8 +207,9 @@ function checkLocally(spec: ParamSpec, raw: string, t: TFunction): string | unde
     if (!match || (match[2] !== undefined && Number(match[2]) < Number(match[1]))) {
       return String(
         t("server.rangeInvalid", {
+          ...rangeBounds(spec),
           defaultValue:
-            "Enter a whole number, or a range like 10-500 with the smaller number first.",
+            "Enter a whole number, or a range like {{low}}-{{high}} with the smaller number first.",
         }),
       );
     }

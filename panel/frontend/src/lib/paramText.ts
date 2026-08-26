@@ -32,3 +32,20 @@ export function paramText(t: TFunction, spec: ParamSpec): ParamText {
     helpLong: String(t(`params.${spec.key}.helpLong`, { defaultValue: spec.helpLong })),
   };
 }
+
+/**
+ * The `{{low}}`/`{{high}}` a range field's hint and error message quote.
+ *
+ * One string is shown on every `kind: "range"` field, and their bounds are three
+ * orders of magnitude apart - `H1` runs to 2147483647 while `RekeyTimeout` stops
+ * at 60. A fixed example is therefore wrong somewhere: "a range like 10-500"
+ * under RekeyTimeout names a number that same field then rejects. So the field
+ * supplies its own, which is what awg/validate.py's _check_range does on the
+ * other side of the wire.
+ *
+ * The fallbacks are H_MIN and H_MAX from that module, used there for the same
+ * reason: a range spec carrying no bounds of its own is a header range.
+ */
+export function rangeBounds(spec: ParamSpec): { low: number; high: number } {
+  return { low: spec.min ?? 1, high: spec.max ?? 2147483647 };
+}

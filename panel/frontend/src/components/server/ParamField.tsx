@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
-import { paramText } from "@/lib/paramText";
+import { paramText, rangeBounds } from "@/lib/paramText";
 import { cn } from "@/lib/utils";
 import type { ParamSpec } from "@/api/types";
 
@@ -246,7 +246,12 @@ function ParamHelp({ spec }: { spec: ParamSpec }): JSX.Element {
 
   const notes: string[] = [];
   if (spec.kind === "range") {
-    notes.push(String(t("server.rangeHint")));
+    // The example is the field's own bounds rather than a fixed pair, because
+    // one hint is shown on fields whose maximums are three orders of magnitude
+    // apart: a "range like 10-500" under RekeyTimeout names a number that same
+    // field then rejects, its maximum being 60. This is the mirror of what
+    // _check_range quotes in its malformed-value message.
+    notes.push(String(t("server.rangeHint", rangeBounds(spec))));
   }
   if (spec.kind === "imitation") {
     notes.push(String(t("server.imitationHelp")));

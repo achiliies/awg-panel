@@ -1245,7 +1245,13 @@ _FEATURE_LABEL: dict[str, str] = {
 }
 
 _INT_RE = re.compile(r"^-?\d+$")
-_RANGE_RE = re.compile(r"^(\d+)\s*-\s*(\d+)$")
+# No whitespace around the dash, because the tools allow none. u16_range_from_string
+# reads the low end with strtoul and then requires the very next byte to be the
+# dash, so `120 - 180` is not a range it accepts - and `awg setconf` answers a
+# line it cannot parse by refusing the whole file, which is an interface that
+# does not come up rather than a setting that underperforms. This used to matter
+# only to H1-H4; it now covers the five timers, whose help text asks for ranges.
+_RANGE_RE = re.compile(r"^(\d+)-(\d+)$")
 _TAG_RE = re.compile(r"<\s*([A-Za-z]+)\s*([^>]*?)\s*>")
 _HEX_RE = re.compile(r"^0[xX]([0-9A-Fa-f]+)$")
 _B64_KEY_RE = re.compile(r"^[A-Za-z0-9+/]{43}=$")
@@ -2450,7 +2456,7 @@ def _check_headers(values: dict[str, str], errors: dict[str, str], add) -> None:
 
 
 def _check_timers(values: dict[str, str], errors: dict[str, str], add) -> None:
-    """The three bounds the five timers have to keep between them.
+    """The four bounds the five timers have to keep between them.
 
     Each is read against the end of the range the kernel itself reads, and that
     is not always the same end. Most timers are armed with u16_range_pick_one,
@@ -2462,6 +2468,12 @@ def _check_timers(values: dict[str, str], errors: dict[str, str], add) -> None:
     allow rather than a typical one: anything else passes a configuration whose
     unluckiest cycle in a few thousand stalls the tunnel, which is the kind of
     fault nobody ever traces back to this page.
+
+    They are asked in order of how basic the failure is, and each returns rather
+    than falling through, so what an admin reads is the most fundamental thing
+    wrong rather than the last one checked. The last of the four is the strictest
+    and is the one randomize_advanced derives RejectAfterTime from: a set the
+    panel drew always clears it, so the set that reaches it was typed by hand.
 
     A parameter that already has an error of its own is left out of the
     arithmetic rather than fed into it. Its value is not a number anyone chose,
@@ -2527,6 +2539,30 @@ def _check_timers(values: dict[str, str], errors: dict[str, str], add) -> None:
             f"s), and that has to stay above the initiator's RekeyAfterTime "
             f"({rekey_after[1]}s) or both ends handshake every cycle instead of one.",
         )
+        return
+
+    # The strictest of the four, and the one the bound above is not: the
+    # initiator's own key has to outlast the negotiation that replaces it.
+    # wg_timers_data_sent waits hi(keepalive) + pick_one(rekey_timeout), the
+    # *top* of the keepalive range rather than the bottom receive.c subtracts,
+    # so the longest a peer can spend waiting for a reply comes off the tops of
+    # both. A set that clears the responder bound but not this one is one the
+    # responder is happy with and the initiator is not, and the failure is worse:
+    # not two handshakes where there should be one, but a key that expires
+    # mid-negotiation and a tunnel dropping traffic until the retry lands.
+    if rekey_after is not None:
+        longest = rekey_after[1] + keepalive[1] + rekey_timeout[1]
+        if reject_lo <= longest:
+            add(
+                "RejectAfterTime",
+                f"RejectAfterTime needs another {longest - reject_lo + 1}s at the bottom of its "
+                f"range. A peer starts a handshake at the top of RekeyAfterTime "
+                f"({rekey_after[1]}s) and may then wait the top of KeepaliveTimeout plus a retry "
+                f"({keepalive[1]} + {rekey_timeout[1]}s) before it hears back, so the bottom of "
+                f"this range has to clear {longest}s - these are the ends the kernel takes for "
+                "that wait. Below it the unluckiest draw expires a key mid-negotiation and the "
+                "tunnel drops traffic until the retry lands.",
+            )
 
 
 def _check_features(values: dict[str, str], errors: dict[str, str], add, features: dict) -> None:
