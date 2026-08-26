@@ -168,7 +168,10 @@ def expires_in_days(path: str) -> int | None:
     cert = _load(path)
     if cert is None:
         return None
-    return (cert.not_valid_after_utc - dt.datetime.now(dt.UTC)).days
+    # (datetime.UTC reads better but landed in 3.11; pyproject still supports
+    # the 3.10 that Ubuntu 22.04 ships.)
+    now = dt.datetime.now(dt.timezone.utc)  # noqa: UP017
+    return (cert.not_valid_after_utc - now).days
 
 
 def _as_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:

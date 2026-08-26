@@ -157,7 +157,9 @@ def subject_alt_names(hosts: list[str]) -> list[x509.GeneralName]:
 def _certificate(
     key: ec.EllipticCurvePrivateKey, names: list[x509.GeneralName], days: int
 ) -> x509.Certificate:
-    now = dt.datetime.now(dt.UTC)
+    # (datetime.UTC reads better but landed in 3.11; pyproject still supports
+    # the 3.10 that Ubuntu 22.04 ships.)
+    now = dt.datetime.now(dt.timezone.utc)  # noqa: UP017
     # No organisation, no country, no email. The subject of a self-signed
     # certificate is a claim nobody checks, and inventing one only makes the
     # browser's warning look more like something it is not.
