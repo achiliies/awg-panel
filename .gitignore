@@ -1,3 +1,4 @@
 dist/
 vendor/
 .agents/
+AGENTS.md
