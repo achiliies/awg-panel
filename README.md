@@ -172,8 +172,8 @@ That is the whole installation. It fetches the installer for the newest release,
 the `SHA256SUMS` published beside it, and runs it only if the two agree. From there it builds the
 AmneziaWG kernel module against the kernel you are running — and against the newer one already
 installed and waiting for a reboot, where there is one — and registers it with DKMS so it survives
-kernel upgrades, writes a server config with an obfuscation profile the Amnezia client can
-actually import, installs the panel, and creates your first client.
+kernel upgrades, writes a server config with an obfuscation profile drawn for that machine
+alone, installs the panel, and creates your first client.
 
 The script carries the module and tools source at the commits this release pins, the panel's
 compiled UI and every Python wheel it needs, so it clones nothing and contacts no package index.

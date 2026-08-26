@@ -25,12 +25,25 @@
 #
 # Only <r N> and <b 0xHEX> are used in imitation packets: the Amnezia client's
 # .conf importer rejects the kernel's other tags (<t> <c> <rc> <rd>) with
-# error code 1000. HeaderProtectionKey and ContentPaddingAddition stay unset
-# for the same reason - the importer silently drops them, and a server that
-# expects them then fails every handshake with no error. RandomTrailers, which
-# AmneziaWG 3.1 added, is left unset here on the same grounds: the installer
-# has no way to know what every client runs, and the panel is where it can be
-# switched on once they are known. Nothing below draws it.
+# error code 1000.
+#
+# The AmneziaWG 3.0 group - the header protection key, the content padding and
+# the timers - is drawn here too, and did not used to be. It was held back
+# because the app's .conf importer drops those lines silently, so a server that
+# expected them refused every client that had been set up that way and said
+# nothing about why. What has changed is the fleet: 3.0 is what a current
+# AmneziaWG speaks, the panel draws the group as part of one profile rather
+# than as a beta somebody opts into, and a server whose strongest settings
+# depend on an operator finding a second button is a server that mostly does
+# not have them. So the installer draws what the panel draws, from the same
+# bands, and the two stay the pair this file has always been half of.
+#
+# RandomTrailers is the exception, and stays unset. It arrived in 3.1 rather
+# than 3.0 - one release newer - and a peer without it measures an arriving
+# handshake, finds it longer than the one it expects and drops it with no error
+# at either end. That is a switch to turn on once the fleet is known to be
+# there, which is the panel's job and not an installer's. Nothing below draws
+# it.
 #
 # DisableCookies, 3.1's other addition, is left unset for a different reason:
 # not a client that cannot read it, but a default worth keeping. It suppresses
@@ -53,15 +66,48 @@ OBFS_H_MAX=2147483647
 # out of that because it rides on every data packet rather than on handshakes.
 OBFS_MTU_BUDGET=1440
 
-# The floor under S1-S4. Nothing the installer writes needs it: header
-# protection is left unset here, and without a key the padding sizes are junk
-# that nobody reads. It is the panel turning one on later that needs it, and by
-# then these numbers are already in awg0.conf - the key's nonce is read from the
-# first 12 bytes of the prefix on each packet, so a server installed below this
-# is one where the header protection button produces a config the kernel refuses
-# and an interface that stops coming up. Twelve bytes a packet is a cheap way
-# not to have that conversation.
+# The floor under S1-S4. The key's nonce is read from the first 12 bytes of the
+# prefix on each packet, so a padding size below this is one the kernel refuses
+# the whole device configuration over: `awg setconf` returns EINVAL and
+# `awg-quick up` stops there. It used to be a floor kept for the panel's
+# benefit, against the day somebody turned header protection on over numbers
+# already written; now the key is drawn in the same run as the padding, and it
+# is what makes that pair safe to write in the first place. Twelve bytes a
+# packet is a cheap way not to have the conversation either way.
 OBFS_HEADER_NONCE=12
+
+# The bands the AmneziaWG 3.0 group is drawn from: the standard profile of
+# ADVANCED_PROFILES in panel/awg/validate.py, which is the one this file
+# mirrors - install.sh offers no profile picker, and standard is the band every
+# parameter's help text quotes.
+#
+# Nothing here trades bandwidth, which is what makes them a second table rather
+# than more rows in the first. The timers decide how often a handshake happens
+# at all, which is the one event on the wire that obfuscation cannot make
+# cheap; the content padding rides inside the encrypted packet and the sender
+# clamps it to what the MTU leaves, so unlike S4 it is charged against nothing.
+OBFS_CPA_LO=32
+OBFS_CPA_HI=96
+OBFS_REKEY_AFTER_LO=120
+OBFS_REKEY_AFTER_HI=180
+OBFS_REKEY_TIMEOUT_LO=4
+OBFS_REKEY_TIMEOUT_HI=7
+OBFS_KEEPALIVE_LO=8
+OBFS_KEEPALIVE_HI=15
+OBFS_ATTEMPTS_LO=16
+OBFS_ATTEMPTS_HI=24
+# How far above the protocol's own floor RejectAfterTime is placed.
+OBFS_MARGIN_LO=60
+OBFS_MARGIN_HI=180
+# RejectAfterTime's ceiling, from the parameter's own bounds in the panel.
+OBFS_REJECT_MAX=7200
+
+# The kernel rounds every packet up to a multiple of this when no content
+# padding is set, which hides the last four bits of a length for free. Content
+# padding replaces that rounding rather than adding to it, so a range whose top
+# is under this buys less than writing nothing does - see the ContentPaddingAddition
+# help text in the panel, and the draw in gen_advanced.
+OBFS_PADDING_MULTIPLE=16
 
 # Domains the imitation DNS packets ask about. Same list as the panel's.
 OBFS_DOMAINS=(apple.com www.google.com cloudflare.com microsoft.com
@@ -345,9 +391,107 @@ _quic_short() {
 
 # One complete profile. Takes the tunnel MTU, so S4 is drawn against the room
 # that is actually left. Sets JC, JMIN, JMAX, S1-S4, H1-H4, I1-I5, GEN_DESC.
+# ------------------------------------------------- the AmneziaWG 3.0 group
+
+# What `awg set` prints when it is given no interface, lowercased. Read once
+# and kept, because the answer cannot change inside one run and the generator
+# asks three times. "-" stands for "there was nothing to ask", which is a
+# different answer from an empty usage text.
+OBFS_AWG_USAGE=""
+
+# True when the installed tools name any of these tokens in that usage.
+#
+# The tool's argument names are the config keys lowercased, so a hit is hard
+# evidence. A miss is evidence too, and is treated as one here: a line the tools
+# cannot parse is not a setting that quietly does nothing, it is `awg setconf`
+# refusing the file and an interface that never comes up at all, on a box the
+# operator is watching install itself.
+#
+# Not being able to ask is the third answer, and it is a yes. That is what the
+# panel does with the same probe, for the same reason - a guess that writes the
+# setting can be corrected, a guess that silently drops it leaves a server
+# quietly weaker than the one the operator thinks they installed. It cannot
+# happen inside install.sh, which builds and installs the release it pins well
+# before this and runs `awg genkey` in the same breath as writing the config;
+# it is what lets tests/obfs.sh source this file on a machine with no AmneziaWG
+# on it and still be checking something.
+awg_supports() {
+    local token
+    if [[ -z "$OBFS_AWG_USAGE" ]]; then
+        if command -v awg >/dev/null 2>&1; then
+            OBFS_AWG_USAGE=$(awg set 2>&1 | tr '[:upper:]' '[:lower:]')
+        fi
+        [[ -n "$OBFS_AWG_USAGE" ]] || OBFS_AWG_USAGE="-"
+    fi
+    [[ "$OBFS_AWG_USAGE" == "-" ]] && return 0
+    for token in "$@"; do
+        [[ "$OBFS_AWG_USAGE" == *"$token"* ]] && return 0
+    done
+    return 1
+}
+
+# The header protection key, the content padding and the timers, drawn as one
+# consistent set. Sets HPK, CPA, REKEY_AFTER, REKEY_TIMEOUT, REJECT_AFTER,
+# KEEPALIVE_TIMEOUT and MAX_ATTEMPTS; any of them may come back empty, and an
+# empty one is a line the caller must not write rather than a value to write
+# blank.
+#
+# Call after gen_sizes: the key is only drawn when the padding it would be
+# carried in can hold its nonce. Writing one over a shorter prefix is not a
+# setting that underperforms, it is an interface that does not come up, and the
+# only case that reaches it is an MTU high enough to leave S4 no room - which
+# --mtu allows and the panel does not.
+gen_advanced() {
+    HPK=""; CPA=""
+    REKEY_AFTER=""; REKEY_TIMEOUT=""; REJECT_AFTER=""
+    KEEPALIVE_TIMEOUT=""; MAX_ATTEMPTS=""
+
+    if awg_supports hpk header-protection-key headerprotectionkey; then
+        local size floor=1
+        for size in "$S1" "$S2" "$S3" "$S4"; do
+            (( size >= OBFS_HEADER_NONCE )) || floor=0
+        done
+        # 64 hex characters, which the parser takes alongside the 44-character
+        # base64 spelling the panel writes. Hex because it comes straight out of
+        # /dev/urandom through the same helper as everything else here, with no
+        # base64 in the dependency list and no `awg genkey`, whose output is a
+        # curve25519 private key with three bits clamped - harmless for a
+        # symmetric key, and still three bits nobody has to give away.
+        (( floor )) && HPK=$(rand_hex 32)
+    fi
+
+    if awg_supports cpa content-padding contentpaddingaddition; then
+        # A range, never a number: this replaces the rounding the kernel does
+        # anyway, so a constant addition trades a length known to within
+        # OBFS_PADDING_MULTIPLE bytes for one that tracks the packet inside it
+        # byte for byte. The bottom sits well below the top because the point is
+        # a spread of observed sizes, and 90-96 is barely one.
+        local high
+        high=$(rand_int "$OBFS_CPA_LO" "$OBFS_CPA_HI")
+        (( high >= OBFS_PADDING_MULTIPLE )) && CPA="$(rand_int 0 $(( high / 3 )))-${high}"
+    fi
+
+    if awg_supports rekey-after-time rekeyaftertime reject-after-time rejectaftertime; then
+        REKEY_AFTER=$(rand_int "$OBFS_REKEY_AFTER_LO" "$OBFS_REKEY_AFTER_HI")
+        REKEY_TIMEOUT=$(rand_int "$OBFS_REKEY_TIMEOUT_LO" "$OBFS_REKEY_TIMEOUT_HI")
+        KEEPALIVE_TIMEOUT=$(rand_int "$OBFS_KEEPALIVE_LO" "$OBFS_KEEPALIVE_HI")
+        MAX_ATTEMPTS=$(rand_int "$OBFS_ATTEMPTS_LO" "$OBFS_ATTEMPTS_HI")
+        # Derived, not drawn. A peer starts a new handshake at RekeyAfterTime and
+        # may then wait KeepaliveTimeout + RekeyTimeout before it hears back, so
+        # the three add up: a RejectAfterTime above only the largest of them can
+        # still expire the key mid-negotiation. It is also the number the far end
+        # measures its own key against, and a responder that reaches the
+        # threshold first starts handshaking on top of the initiator - which
+        # doubles the one event on the wire none of this can disguise.
+        REJECT_AFTER=$(( REKEY_AFTER + KEEPALIVE_TIMEOUT + REKEY_TIMEOUT                          + $(rand_int "$OBFS_MARGIN_LO" "$OBFS_MARGIN_HI") ))
+        (( REJECT_AFTER > OBFS_REJECT_MAX )) && REJECT_AFTER=$OBFS_REJECT_MAX
+    fi
+}
+
 gen_obfuscation() {
     gen_junk
     gen_sizes "${1:-1400}"
     gen_header_ranges
     gen_imitation
+    gen_advanced
 }

@@ -52,8 +52,38 @@ for (( round = 0; round < ROUNDS; round++ )); do
         printf 'MTU=%s\tJc=%s\tJmin=%s\tJmax=%s\t' "$mtu" "$JC" "$JMIN" "$JMAX"
         printf 'S1=%s\tS2=%s\tS3=%s\tS4=%s\t' "$S1" "$S2" "$S3" "$S4"
         printf 'H1=%s\tH2=%s\tH3=%s\tH4=%s\t' "$H1" "$H2" "$H3" "$H4"
-        printf 'I1=%s\tI2=%s\tI3=%s\tI4=%s\tI5=%s\n' "$I1" "$I2" "$I3" "$I4" "$I5"
+        printf 'I1=%s\tI2=%s\tI3=%s\tI4=%s\tI5=%s\t' "$I1" "$I2" "$I3" "$I4" "$I5"
+        printf 'HeaderProtectionKey=%s\tContentPaddingAddition=%s\t' "$HPK" "$CPA"
+        printf 'RekeyAfterTime=%s\tRekeyTimeout=%s\tRejectAfterTime=%s\t' \
+               "$REKEY_AFTER" "$REKEY_TIMEOUT" "$REJECT_AFTER"
+        printf 'KeepaliveTimeout=%s\tMaxHandshakeAttempts=%s\n' \
+               "$KEEPALIVE_TIMEOUT" "$MAX_ATTEMPTS"
     } >> "$WORK/profiles.tsv"
 done
 
 PYTHONPATH="$REPO/panel" "$PY" "$REPO/tests/obfs_check.py" "$WORK/profiles.tsv"
+RC=$?
+
+# The one case the validator above cannot be asked about, because it is not a
+# config the panel would accept: --mtu takes anything up to 9000, and past 1428
+# there is no room left for S4 at all. The header protection key's nonce is read
+# from the first OBFS_HEADER_NONCE bytes of that prefix, so a key written over
+# a missing one is `awg setconf` returning EINVAL and an interface that never
+# comes up - on a box the operator is watching install itself. The key has to be
+# the thing that gives way, and the timers have to survive it: they are not
+# carried in the padding and have nothing to do with it.
+echo "  jumbo MTU: the key gives way, the timers do not"
+for mtu in 1429 1500 9000; do
+    gen_obfuscation "$mtu"
+    if [[ -n "$HPK" ]]; then
+        echo "  FAIL  MTU ${mtu} left S4=${S4}, and a header protection key was drawn anyway"
+        RC=1
+    fi
+    if [[ -z "$REKEY_AFTER" || -z "$REJECT_AFTER" ]]; then
+        echo "  FAIL  MTU ${mtu} dropped the timers, which the padding does not carry"
+        RC=1
+    fi
+done
+(( RC == 0 )) && echo "  ok    no key drawn at MTU 1429, 1500 or 9000; timers still drawn"
+
+exit "$RC"

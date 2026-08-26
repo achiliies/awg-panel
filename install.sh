@@ -1737,12 +1737,21 @@ if [[ -n "$SUBNET6_MODE" ]]; then
 fi
 
 # --------------------------------------------- 6. obfuscation profile
-# Only parameters the Amnezia client's .conf importer preserves:
 #   required  Jc Jmin Jmax S1 S2 H1-H4      optional  S3 S4 I1-I5
-# HeaderProtectionKey / ContentPaddingAddition / timer overrides are
-# silently DROPPED on import, so setting them only breaks the handshake.
+#   AmneziaWG 3.0  HeaderProtectionKey ContentPaddingAddition and the timers
 # Imitation packets use only <r N> and <b 0xHEX>; the kernel also accepts
 # <t> <c> <rc> <rd> but the client rejects those with error code 1000.
+#
+# The 3.0 group used to be left out on the same grounds as those tags: the
+# Amnezia app's .conf importer drops the lines silently, so a server that
+# expected them refused every client set up that way and said nothing about
+# why. It is drawn now, because 3.0 is what a current AmneziaWG speaks and the
+# panel draws the group as part of one profile rather than as a beta behind a
+# second button - and a server whose strongest settings wait for an operator to
+# go and find that button is a server that mostly does not have them. lib/obfs.sh
+# asks the tools it just installed before writing any of it, and RandomTrailers
+# is still left out: that one arrived in 3.1, one release newer, and a peer
+# without it drops an arriving handshake for being longer than it expects.
 #
 # Every one of them is drawn here rather than written as a constant. A value
 # this script ships the same to everybody is not obfuscation - it is a
@@ -1791,6 +1800,21 @@ gen_obfuscation "$MTU"
 echo "$(t "  junk ${JC}x${JMIN}-${JMAX}, padding ${S1}/${S2}/${S3}/${S4}, four header ranges" \
           "  мусорные пакеты ${JC}x${JMIN}-${JMAX}, дополнение ${S1}/${S2}/${S3}/${S4}, 4 диапазона заголовков")"
 echo "$(t "  decoys: ${GEN_DESC}" "  имитация протокола: ${GEN_DESC}")"
+# Said as what was drawn rather than as a list of names, because the interesting
+# case is the one where something was not: a jumbo --mtu leaves S4 no room and
+# takes the header protection key with it, and tools older than the pinned ones
+# take whatever they do not understand. Neither is an error, and both are
+# something the operator should be able to read off the install rather than
+# discover on the Obfuscation page a month later.
+if [[ -n "$HPK" ]]; then
+    echo "$(t "  header protection on, content padding ${CPA:-off}, timers ${REKEY_AFTER}/${REJECT_AFTER}s" \
+              "  защита заголовка включена, набивка содержимого ${CPA:-выкл}, таймеры ${REKEY_AFTER}/${REJECT_AFTER} с")"
+else
+    echo "$(t "  header protection off: MTU ${MTU} leaves no padding for its nonce" \
+              "  защита заголовка выключена: при MTU ${MTU} не остаётся набивки для одноразового номера")"
+fi
+echo "$(t "  random packet trailers left off - they need AmneziaWG 3.1 on every client" \
+          "  случайные хвосты пакетов выключены — им нужен AmneziaWG 3.1 на каждом клиенте")"
 
 # ------------------------------------------------- 7. server config
 step "$(t "Writing the server configuration" "Запись конфигурации сервера")"
@@ -1824,6 +1848,22 @@ EOF
 for SLOT in I1 I2 I3 I4 I5; do
     if [[ -n "${!SLOT}" ]]; then
         printf '%s = %s\n' "$SLOT" "${!SLOT}" >> "$CONF_DIR/${IFACE}.conf"
+    fi
+done
+
+# The AmneziaWG 3.0 group, written the same way and for the same reason: an
+# empty value here is a line that must not appear rather than one to write
+# blank. gen_advanced leaves a setting empty when the installed tools cannot
+# parse it, or - for the key alone - when the padding it would be carried in is
+# too short to hold its nonce, and `awg setconf` refuses a whole config over
+# either. RandomTrailers is not in the list because nothing draws it.
+for SETTING in HeaderProtectionKey:HPK ContentPaddingAddition:CPA \
+               RekeyAfterTime:REKEY_AFTER RekeyTimeout:REKEY_TIMEOUT \
+               RejectAfterTime:REJECT_AFTER KeepaliveTimeout:KEEPALIVE_TIMEOUT \
+               MaxHandshakeAttempts:MAX_ATTEMPTS; do
+    VAR=${SETTING#*:}
+    if [[ -n "${!VAR}" ]]; then
+        printf '%s = %s\n' "${SETTING%%:*}" "${!VAR}" >> "$CONF_DIR/${IFACE}.conf"
     fi
 done
 

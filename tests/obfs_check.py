@@ -141,13 +141,98 @@ def check(number: int, values: dict[str, str]) -> None:
     for warning in validate.warnings_for(values):
         fail(number, f"warned: {warning}")
 
-    # The installer writes no header protection key, so nothing here needs the
-    # padding floor yet - the panel turning one on later does, and by then these
-    # numbers are already in awg0.conf. A server installed below the floor is one
-    # where that button produces a config the kernel refuses.
-    short = validate.header_protection_short({**values, "HeaderProtectionKey": "x" * 44})
-    if short:
-        fail(number, f"{', '.join(short)} below the header protection floor")
+    # The key and the padding it is carried in are drawn in the same run, so the
+    # only correct pairing is both or neither. A key over a prefix too short for
+    # its nonce is not a weaker server, it is `awg setconf` returning EINVAL and
+    # an interface that never comes up; a prefix long enough with no key is the
+    # installer quietly declining to use the strongest setting it has.
+    key = values.get("HeaderProtectionKey", "")
+    short = validate.header_protection_short({**values, "HeaderProtectionKey": key or "x" * 44})
+    if key and short:
+        fail(number, f"{', '.join(short)} below the header protection floor, but a key was drawn")
+    if not key and not short:
+        fail(number, "the padding could carry a header protection key and none was drawn")
+
+    # Drawn as a set or not at all: a config carrying three of the five timers
+    # is one where the two the protocol falls back on were chosen by nobody.
+    timers = (
+        "RekeyAfterTime",
+        "RekeyTimeout",
+        "RejectAfterTime",
+        "KeepaliveTimeout",
+        "MaxHandshakeAttempts",
+    )
+    drawn = [name for name in timers if values.get(name)]
+    if drawn and len(drawn) != len(timers):
+        fail(number, f"only {len(drawn)} of {len(timers)} timers drawn: {drawn}")
+
+    # 3.1 rather than 3.0, and a peer without it drops an arriving handshake for
+    # being longer than it expects. That is the panel's switch to offer once the
+    # fleet is known, not a line for an installer to write blind.
+    if values.get("RandomTrailers"):
+        fail(number, "RandomTrailers was drawn; it needs 3.1 on every peer")
+
+    if drawn:
+        check_advanced_bands(number, values)
+
+
+def check_advanced_bands(number: int, values: dict[str, str]) -> None:
+    """The advanced values against the panel's own bands, read from the panel.
+
+    validate_params above only enforces each parameter's hard bounds, which are
+    far wider than the band a profile draws from - so it would pass a shell
+    generator that had drifted a whole profile away from the Python one and
+    still say the two agree. That gap is tolerable for the obfuscation bands,
+    where both sides have quoted the same numbers since the beginning; it is not
+    for these, which were copied across the two languages by hand and can only
+    be kept in step by something that reads one and checks the other.
+
+    ADVANCED_PROFILES["standard"] is the band, because install.sh offers no
+    profile picker and standard is what lib/obfs.sh mirrors.
+    """
+    band = validate.ADVANCED_PROFILES["standard"]
+
+    def within(key: str, bounds: tuple[int, int]) -> None:
+        value = int(values[key])
+        if not bounds[0] <= value <= bounds[1]:
+            fail(number, f"{key}={value} is outside the panel's {bounds[0]}-{bounds[1]} band")
+
+    within("RekeyAfterTime", band.rekey_after)
+    within("RekeyTimeout", band.rekey_timeout)
+    within("KeepaliveTimeout", band.keepalive)
+    within("MaxHandshakeAttempts", band.attempts)
+
+    # Derived rather than drawn, so what is checked is the derivation: the three
+    # timers a peer may spend on one rekey cycle, plus the profile's margin.
+    floor = (
+        int(values["RekeyAfterTime"])
+        + int(values["KeepaliveTimeout"])
+        + int(values["RekeyTimeout"])
+    )
+    margin = int(values["RejectAfterTime"]) - floor
+    if not band.margin[0] <= margin <= band.margin[1]:
+        fail(number, f"RejectAfterTime sits {margin}s above the rekey cycle, outside {band.margin}")
+
+    padding = values.get("ContentPaddingAddition", "")
+    if padding:
+        low, _, high = padding.partition("-")
+        if not high:
+            fail(number, f"ContentPaddingAddition={padding!r} is a number, not a range")
+        else:
+            within_pad = band.padding[0] <= int(high) <= band.padding[1]
+            if not within_pad:
+                fail(number, f"content padding top {high} is outside {band.padding}")
+            if int(low) > int(high) // 3:
+                fail(number, f"content padding floor {low} is not well below its top {high}")
+            if int(high) < validate.PADDING_MULTIPLE:
+                fail(
+                    number,
+                    f"content padding top {high} is under the {validate.PADDING_MULTIPLE}-byte rounding it replaces",
+                )
+
+    key = values.get("HeaderProtectionKey", "")
+    if key and not validate._HEX_KEY_RE.match(key) and not validate._B64_KEY_RE.match(key):
+        fail(number, "the header protection key is in neither spelling the parser takes")
 
     packets = [values[f"I{n}"] for n in range(1, 6) if values.get(f"I{n}")]
     if not 3 <= len(packets) <= 5:

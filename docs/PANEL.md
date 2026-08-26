@@ -721,11 +721,24 @@ that argues with the page it fills in is a generator nobody trusts.
 | `S4` | sizes | 12–40 bytes, never more than `1440 − MTU` |
 | `H1`–`H4` | headers | a random range inside one quarter of 5–2147483647, then shuffled between the four |
 | `I1`–`I5` | imitation | three to five packets of one protocol: a WebRTC call, a QUIC connection or a run of DNS lookups |
+| `HeaderProtectionKey` | advanced | 32 bytes from `/dev/urandom`, and only when `S1`–`S4` can carry its 12-byte nonce |
+| `ContentPaddingAddition` | advanced | a range: top 32–96 bytes, floor anywhere under a third of it |
+| `RekeyAfterTime` | advanced | 120–180 s |
+| `RekeyTimeout` | advanced | 4–7 s |
+| `KeepaliveTimeout` | advanced | 8–15 s |
+| `MaxHandshakeAttempts` | advanced | 16–24 |
+| `RejectAfterTime` | advanced | derived, not drawn: `RekeyAfterTime` + `KeepaliveTimeout` + `RekeyTimeout`, plus 60–180 s |
 
-The network group is not part of this and does have fixed values, and so is the
-advanced group at install time — `install.sh` leaves it empty, and the values
-below are the ones the protocol already uses, so an empty field and the number
-beside it mean the same thing on the wire:
+The advanced rows are `install.sh` drawing from the second preset table, the one
+the panel calls `ADVANCED_PROFILES`, at its standard band. It used to leave that
+group empty; the reasoning is under [the advanced group](#the-advanced-group)
+below. The bands are not the obfuscation bands, because nothing in them trades
+bandwidth — the timers trade how often a handshake happens at all.
+
+The network group is not part of this and does have fixed values, and neither is
+`RandomTrailers`, which is left empty on purpose — the value beside it is what
+the protocol does anyway, so an empty field and that value mean the same thing
+on the wire:
 
 | Setting | Group | Value |
 |---|---|---|
@@ -735,10 +748,7 @@ beside it mean the same thing on the wire:
 | `DNS` | network | `8.8.8.8, 8.8.4.4`, plus the two IPv6 resolvers where the tunnel carries IPv6 out |
 | `AllowedIPs` | network | `0.0.0.0/0, ::/0`, and `0.0.0.0/0` alone only where IPv6 is off |
 | `PersistentKeepalive` | network | 25 |
-| `RekeyAfterTime`, `RekeyTimeout` | advanced | 120, 5 — left empty |
-| `RejectAfterTime`, `KeepaliveTimeout` | advanced | 180, 10 — left empty |
-| `MaxHandshakeAttempts` | advanced | 18 — left empty |
-| `RandomTrailers` | advanced | off — left empty, and the panel's generator leaves it off too |
+| `RandomTrailers` | advanced | off — left empty by the installer and by the panel's generator alike |
 
 The rules behind the bands, in short: `Jmin` < `Jmax`; `S1 + 56 ≠ S2`, or the
 two handshake packets come out the same size and become a recognisable pair;
@@ -778,26 +788,38 @@ actually left after the other one, so a drawn set always saves; when there is no
 room, the field comes back at `0` or empty with a sentence saying which setting
 took the space, rather than a value the save would then reject.
 
-`install.sh` leaves the advanced group empty, on purpose: those settings were
-added in AmneziaWG 3.0 (and 3.1 for `RandomTrailers`; 3.1's other addition,
-`DisableCookies`, is server-side and sits on the Server page instead), and the
-installer has no way to know what the fleet runs. The panel does — it is where
-the clients are issued — so that is where the group is filled in.
-
 ### The advanced group
 
-It used to be eight empty boxes an admin was expected to fill in from the
-protocol specification, which is the same mistake a fixed obfuscation profile
-would be. A value everybody copies out of one document is a constant, not a
-setting, and the timers say precisely how often this server handshakes.
+These settings were added in AmneziaWG 3.0 — and 3.1 for `RandomTrailers`; 3.1's
+other addition, `DisableCookies`, is server-side and sits on the Server page
+instead.
 
-So *Reconfigure* draws them with everything else, out of a second preset table
-under the same four profile names: a fresh 32-byte header protection key,
-content padding, and timers that interlock. The bands are not the obfuscation
-bands, because nothing here trades bandwidth. What *DPI-resistant* buys on this
-side is a handshake that happens less often — the one event on the wire that
-obfuscation cannot make cheap — so it stretches the timers rather than
+Both generators used to leave the whole group empty. The reason was never that
+the values are hard to pick: it was that a peer which does not honour one of them
+fails *silently* — it negotiates without the setting, the server refuses it, and
+neither end says why — and while most clients were on 2.x that was most peers.
+The Amnezia app made it worse, because its `.conf` importer drops these lines
+whatever version is reading them. So the group was a beta an operator opted into
+behind a second button, and it was eight empty boxes they were expected to fill
+in from the protocol specification — which is the same mistake a fixed
+obfuscation profile would be. A value everybody copies out of one document is a
+constant, not a setting, and the timers say precisely how often this server
+handshakes.
+
+3.0 is what a current AmneziaWG speaks, so both generators draw the group now:
+*Reconfigure* with everything else on the page, and `install.sh` from the same
+bands at install time, so a server has its strongest settings from the first
+minute rather than from whenever somebody finds the button. What *DPI-resistant*
+buys on this side is a handshake that happens less often — the one event on the
+wire that obfuscation cannot make cheap — so it stretches the timers rather than
 shortening them.
+
+**What this costs, stated plainly.** A peer that is not on AmneziaWG 3.0 will not
+connect to a server installed or reconfigured this way, and neither will one set
+up by importing a `.conf` into the Amnezia app, if that importer still discards
+the lines. Both fail with no error at either end. Clearing the group — empty
+every field and save, or delete the lines from `awg0.conf` — puts the server back
+where it was.
 
 `RejectAfterTime` is derived rather than drawn, because it has to outlast a
 whole rekey cycle rather than the longest single timer in it — a peer starts a
