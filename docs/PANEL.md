@@ -768,12 +768,11 @@ took the space, rather than a value the save would then reject.
 The advanced group is left empty on a fresh install, on purpose. Those settings
 were added in AmneziaWG 3.0 (and 3.1 for `RandomTrailers`; 3.1's other addition,
 `DisableCookies`, is server-side and sits on the Server page instead) and the
-values shown
-are the ones the protocol already uses, so writing them changes nothing; setting
-them to anything else breaks every peer that does not speak that version — which
-is still most of them — along with every peer that imported a `.conf` through
-the Amnezia app, whose importer discards the lines without a word. The panel
-badges the whole group as a beta feature for that reason.
+values shown are the ones the protocol already uses, so writing them changes
+nothing; setting them to anything else breaks every peer that does not speak
+that version — which is still most of them — along with every peer that imported
+a `.conf` through the Amnezia app, whose importer discards the lines without a
+word. The panel badges the whole group as a beta feature for that reason.
 
 ### Filling in the advanced group
 

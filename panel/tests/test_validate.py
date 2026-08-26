@@ -931,8 +931,9 @@ def test_disable_cookies_rejects_unrecognized_values(value):
 
 
 def test_disable_cookies_warns_about_what_it_costs_when_on():
-    """Nothing about a flood is visible from the settings page, so the save is the
-    only moment anyone can be told the protection is going away."""
+    """Nothing about a flood is visible from a settings page, so the save is where
+    an admin first hears the protection is going away - and server/status keeps
+    saying it for as long as the switch is on, which test_api_server holds."""
     matching = [t for t in validate.warnings_for({"DisableCookies": "on"}) if "DisableCookies" in t]
     assert matching, "enabling it must say what it costs"
     assert "cookie challenge" in matching[0]

@@ -1279,8 +1279,10 @@ def warnings_for(values: dict[str, str]) -> list[str]:
 
     # Not "this will not work" like the rest of this function, but "this works
     # and costs you something you may not have meant to spend". Nothing about a
-    # flood is visible from the settings page, so the moment the switch goes on
-    # is the only moment anyone is in a position to be told.
+    # flood is visible from a settings page, so the save is where an admin first
+    # hears what the switch costs - and, like the importer advisories above, it
+    # then stands in server/status for as long as the switch is on, because a
+    # protection that is off is a live condition and not only a past decision.
     if _is_set(PARAMS["DisableCookies"], _get(values, "DisableCookies")):
         out.append(
             "DisableCookies is on: this server no longer answers a handshake flood with a "

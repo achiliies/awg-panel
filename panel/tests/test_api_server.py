@@ -616,6 +616,29 @@ def test_a_module_installed_but_not_yet_loaded_is_said_out_loud(api, monkeypatch
     assert "reboot" in notes[0]
 
 
+def test_a_disabled_cookie_reply_keeps_saying_so_on_the_status_page(api):
+    """The save is where an admin first hears what the switch costs, but it is
+    not the last word: a server not answering a flood is a live condition, so
+    the sentence stands on server/status for as long as the switch is on - the
+    same rule the importer advisories are held to. read_server carries the
+    server-only params for exactly this, and nothing else would notice if it
+    stopped.
+    """
+    assert not [text for text in _status_warnings(api) if "DisableCookies" in text]
+
+    assert (
+        api.put(api_url("server"), {"params": {"DisableCookies": "on"}}, format="json").status_code
+        == 200
+    )
+
+    standing = [text for text in _status_warnings(api) if "DisableCookies" in text]
+    assert standing, _status_warnings(api)
+    assert "cookie challenge" in standing[0]
+
+    api.put(api_url("server"), {"params": {"DisableCookies": ""}}, format="json")
+    assert not [text for text in _status_warnings(api) if "DisableCookies" in text]
+
+
 def test_matching_module_versions_say_nothing(api, monkeypatch):
     """The normal case is every install, so it must not carry a warning."""
     controller = get_controller()

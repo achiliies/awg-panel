@@ -910,7 +910,7 @@ Idempotent: starting a tunnel that is already up answers `204`.
   "moduleVersion": "3.1.20260812",
   "features": { "headerRanges": true, "imitationPackets": true,
                 "headerProtectionKey": true, "contentPadding": true, "timers": true,
-                "randomTrailers": true },
+                "randomTrailers": true, "disableCookies": true },
   "serviceActive": "active",
   "serviceEnabled": "enabled",
   "listening": true,
