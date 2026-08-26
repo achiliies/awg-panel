@@ -711,9 +711,13 @@ the help text the UI renders, so the two cannot drift.
 ```
 
 `mustMatchClient` means changing it invalidates every issued config.
-`importerSafe: false` means the Amnezia mobile app's `.conf` importer silently
-discards the setting, so a client that imports the file negotiates without it
-and the handshake fails with no error — the UI marks these in red.
+`importerSafe: false` means the setting arrived in AmneziaWG 3.0 (3.1 for
+`RandomTrailers`) and the Amnezia mobile app's `.conf` importer silently
+discards it, so a client that imports the file negotiates without it and the
+handshake fails with no error. It is a fact about the parameter, stated on the
+field it belongs to; it is no longer a badge on every field of the advanced
+group, and no longer an advisory on every save that sets one, because a current
+AmneziaWG client speaks 3.0 and the generator draws that group by default.
 `supported: false` means the installed module or tools do not have the feature.
 `feature` names the flag in
 [`GET server/status`](#get-apiv1serverstatus)'s `features` object that
@@ -735,10 +739,21 @@ Draws a complete, valid set for this server alone and returns it as a
 **preview**; nothing is saved until you `PUT api/v1/server`. Every field of the
 body is optional, so `{}` still means what it always did:
 
-| Field     | Default        | Meaning                                                   |
-| --------- | -------------- | --------------------------------------------------------- |
-| `profile` | `"standard"`   | `standard`, `dpi`, `fast` or `random` — which band to draw from |
-| `scope`   | `"obfuscation"`| `obfuscation` for `Jc`…`I5`, `advanced` for the AmneziaWG 3.0/3.1 group |
+| Field     | Default      | Meaning                                                         |
+| --------- | ------------ | --------------------------------------------------------------- |
+| `profile` | `"standard"` | `standard`, `dpi`, `fast` or `random` — which band to draw from |
+
+One draw covers the whole Obfuscation page: `Jc`…`I5` **and** the AmneziaWG 3.0
+group behind them. There was a `scope` here — `obfuscation` or `advanced` —
+while that second group was something an operator opted into rather than part of
+what a server is configured with. The clients caught up, and two draws for one
+server then meant a page that could be left half filled, or filled from two
+different bands.
+
+The profile is read in two preset tables, one per half, and the bands behind the
+name are not the same in both: the obfuscation bands trade bandwidth for cover,
+the advanced ones trade how often this server handshakes at all. One name, one
+consistent set.
 
 Nothing here describes the form. An `mtu` and an `s4` were each accepted once so
 a preview could be drawn against a value the form held and the disk did not, and
@@ -751,8 +766,8 @@ the trade between how much of the protocol's shape a value hides and what
 sending it costs. `random` spans the other three, so that the choice of profile
 is not itself something to fingerprint a server by. An unknown name is a 400.
 
-With the default scope the response carries `Jc`, `Jmin`, `Jmax`, `S1`–`S4`,
-`H1`–`H4` and `I1`–`I5`:
+The response carries `Jc`, `Jmin`, `Jmax`, `S1`–`S4`, `H1`–`H4`, `I1`–`I5` and
+the advanced group below them:
 
 ```json
 {
@@ -764,7 +779,12 @@ With the default scope the response carries `Jc`, `Jmin`, `Jmax`, `S1`–`S4`,
     "I1": "<b 0x000100082112a442><r 12><b 0x00240004><r 4>",
     "I2": "<b 0x0101000c2112a442><r 12><b 0x002000080001><r 6>",
     "I3": "<b 0x8063><r 6><b 0x3f721fcb><r 154>",
-    "I4": "", "I5": ""
+    "I4": "", "I5": "",
+    "HeaderProtectionKey": "xYbOANvXjB9HdbfeC92cefXNNd8U2iIXtvmnHMogkCs=",
+    "ContentPaddingAddition": "12-64",
+    "RekeyAfterTime": "163", "RekeyTimeout": "7", "RejectAfterTime": "293",
+    "KeepaliveTimeout": "11", "MaxHandshakeAttempts": "24",
+    "RandomTrailers": ""
   },
   "warnings": []
 }
@@ -790,37 +810,24 @@ packet larger however wide the range is.
 Every draw also stays at or above 12 bytes on `S1`–`S4`, which is what a header
 protection key needs (see below).
 
-With `"scope": "advanced"` the response carries the eight AmneziaWG 3.0 and 3.1
-settings instead, drawn as one consistent set — `RejectAfterTime` is derived
+The advanced half is drawn as one consistent set — `RejectAfterTime` is derived
 rather than drawn, because it has to outlast a whole rekey cycle:
 `RekeyAfterTime` plus the `KeepaliveTimeout` + `RekeyTimeout` a peer may spend
-waiting for the answer.
-
-```json
-{
-  "params": {
-    "HeaderProtectionKey": "xYbOANvXjB9HdbfeC92cefXNNd8U2iIXtvmnHMogkCs=",
-    "ContentPaddingAddition": "12-64",
-    "RekeyAfterTime": "163", "RekeyTimeout": "7", "RejectAfterTime": "293",
-    "KeepaliveTimeout": "11", "MaxHandshakeAttempts": "24",
-    "RandomTrailers": "on"
-  },
-  "warnings": ["HeaderProtectionKey, ContentPaddingAddition, …: these arrived with AmneziaWG 3.0 and 3.1 …"]
-}
-```
-
-Read those warnings. Every value in this scope needs AmneziaWG 3.0 at the far
-end (or 3.1 for `RandomTrailers`); a parameter the installed module cannot do
+waiting for the answer. Every value in it needs AmneziaWG 3.0 at the far end,
+which is what a current client is; a parameter the installed module cannot do
 comes back empty with a sentence saying so, rather than producing a set that
 `PUT api/v1/server` would then reject.
 
-`RandomTrailers` is the one setting in the advanced group that is a switch rather
-than a value, so there is nothing to copy between the two ends — but both ends
-still need it, and it does nothing to data packets while `ContentPaddingAddition`
-is set.
+`RandomTrailers` comes back **empty**, and is the only thing here that does. It
+arrived in AmneziaWG 3.1 rather than 3.0 — one release newer — and a peer without
+it measures an arriving handshake, finds it longer than the one it expects and
+drops it with no error at either end. So it is left as the one switch an operator
+turns on deliberately once the fleet is known to be there. It is also a switch
+rather than a value, so there is nothing to copy between the two ends, and it
+does nothing to data packets while `ContentPaddingAddition` is set.
 
-AmneziaWG 3.1's other addition, `DisableCookies`, is deliberately not in this
-scope and is not drawn by either generator. It is a server-side switch — it
+AmneziaWG 3.1's other addition, `DisableCookies`, is deliberately not drawn by
+either generator. It is a server-side switch — it
 suppresses the cookie challenge that answers a handshake flood — so it belongs
 to no obfuscation profile, appears in no client config, and never sets
 `mustReimport`. It is still an `[Interface]` value, so saving it sets
@@ -834,13 +841,16 @@ replaces a length known to within 16 bytes with one that tracks the packet
 inside byte for byte. A range is the only form worth writing, and the generator
 will not draw one whose top is below 16.
 
-`HeaderProtectionKey` puts a floor under padding this scope does not contain.
-The nonce the key is used with is read from the first 12 bytes of the `S1`–`S4`
-prefix on each packet, so all four have to be at least 12 or the kernel refuses
-the whole device configuration: `awg setconf` returns `EINVAL` and the interface
-does not come up. `PUT api/v1/server` rejects that combination, reported against
-the key and each short field, and the preview says which fields will need
-raising before the drawn set can be saved.
+`HeaderProtectionKey` puts a floor under the padding drawn beside it. The nonce
+the key is used with is read from the first 12 bytes of the `S1`–`S4` prefix on
+each packet, so all four have to be at least 12 or the kernel refuses the whole
+device configuration: `awg setconf` returns `EINVAL` and the interface does not
+come up. `PUT api/v1/server` rejects that combination, reported against the key
+and each short field. One draw cannot produce it — the padding and the key come
+out of the same response, and every band starts at or above the floor — so the
+only way left to reach it is to save half a preview. The one case the preview
+still has to answer is an MTU so large that no `S4` fits at all: the key is left
+empty with a sentence saying so, because the MTU is on another page.
 
 To turn the group off again, `PUT api/v1/server` with every one of those eight
 keys set to `""`. That removes the lines rather than blanking them.

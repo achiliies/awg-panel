@@ -136,12 +136,14 @@ class ParamSpecSerializer(CamelCaseMixin, serializers.Serializer):
 
 
 class ReconfigureSerializer(CamelCaseMixin, serializers.Serializer):
-    """POST api/v1/server/reconfigure. Every field optional, so ``{}`` still works.
+    """POST api/v1/server/reconfigure. One optional field, so ``{}`` still works.
 
-    ``scope`` says which half of the page asked: the obfuscation set every
-    client speaks, or the advanced group that only an AmneziaWG 3.0+ peer knows.
-    They are drawn separately because they are set separately - an admin who
-    redraws the junk sizes has not asked to be given a header protection key.
+    ``profile`` is the whole body now. There was a ``scope`` beside it saying
+    which half of the page had asked - the obfuscation set every client speaks,
+    or the advanced group only an AmneziaWG 3.0+ peer knew - because the second
+    half was something an operator opted into rather than part of what a server
+    is. The clients caught up and the halves became one page with one button, so
+    a name that could only ever be spelled one way is not a field.
 
     Nothing describes the form. There were an ``mtu`` and an ``s4`` here, each
     added so a preview could be drawn against a value the form held and the disk
@@ -154,7 +156,6 @@ class ReconfigureSerializer(CamelCaseMixin, serializers.Serializer):
     profile = serializers.ChoiceField(
         choices=sorted(validate.PROFILES), default=validate.DEFAULT_PROFILE
     )
-    scope = serializers.ChoiceField(choices=("obfuscation", "advanced"), default="obfuscation")
 
 
 class ParamPreviewSerializer(CamelCaseMixin, serializers.Serializer):

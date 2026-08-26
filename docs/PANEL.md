@@ -640,20 +640,30 @@ choose in a form: the only choices are what the machine can already do.
 
 ## Obfuscation
 
-Four groups of settings — junk packets, packet sizes, header markers and
-imitation packets — sit in one card on the **Obfuscation** page, because they
-are one thing. Nobody adjusts the padding without also thinking about the header
-ranges; they are saved together, they invalidate every client config together,
-and above all they are *generated* together.
+Five groups of settings — junk packets, packet sizes, header markers, imitation
+packets and the advanced group behind them — sit in one card on the
+**Obfuscation** page, because they are one thing. Nobody adjusts the padding
+without also thinking about the header ranges; they are saved together, they
+invalidate every client config together, and above all they are *generated*
+together.
 
-The page is its own entry in the sidebar, between Server and Statistics, and the
-advanced group sits below the card as its second half. That split is about how
-often each is touched rather than about where the values live — they are
-one config behind one `PUT api/v1/server`. Where the tunnel listens is decided
-at install time and revisited when something about the network changes; what it
-looks like on the wire is redrawn, handed out and redrawn again, and costs every
-client a new config each time. Each page therefore saves only its own groups,
-and its save bar only ever states the cost of those.
+The advanced group was a card of its own below this one until the clients caught
+up. It sat apart because it was a beta: header protection, content padding and
+the timers all arrived in AmneziaWG 3.0, and a peer that did not speak 3.0
+failed silently — so the group started closed, carried its warning on its face,
+and had a *Generate* and a *Clear* of its own. A current client speaks 3.0. Two
+generators for one server then meant a page that could be left half drawn, or
+drawn from two different bands, so there is one *Reconfigure* and the group is a
+section like the four above it.
+
+The page is its own entry in the sidebar, between Server and Statistics. That
+split is about how often each page is touched rather than about where the values
+live — they are one config behind one `PUT api/v1/server`. Where the tunnel
+listens is decided at install time and revisited when something about the
+network changes; what it looks like on the wire is redrawn, handed out and
+redrawn again, and costs every client a new config each time. Each page
+therefore saves only its own groups, and its save bar only ever states the cost
+of those.
 
 ### Nothing here is a default
 
@@ -712,7 +722,10 @@ that argues with the page it fills in is a generator nobody trusts.
 | `H1`–`H4` | headers | a random range inside one quarter of 5–2147483647, then shuffled between the four |
 | `I1`–`I5` | imitation | three to five packets of one protocol: a WebRTC call, a QUIC connection or a run of DNS lookups |
 
-The network and advanced groups are not part of this and do have fixed values:
+The network group is not part of this and does have fixed values, and so is the
+advanced group at install time — `install.sh` leaves it empty, and the values
+below are the ones the protocol already uses, so an empty field and the number
+beside it mean the same thing on the wire:
 
 | Setting | Group | Value |
 |---|---|---|
@@ -725,7 +738,7 @@ The network and advanced groups are not part of this and do have fixed values:
 | `RekeyAfterTime`, `RekeyTimeout` | advanced | 120, 5 — left empty |
 | `RejectAfterTime`, `KeepaliveTimeout` | advanced | 180, 10 — left empty |
 | `MaxHandshakeAttempts` | advanced | 18 — left empty |
-| `RandomTrailers` | advanced | off — left empty |
+| `RandomTrailers` | advanced | off — left empty, and the panel's generator leaves it off too |
 
 The rules behind the bands, in short: `Jmin` < `Jmax`; `S1 + 56 ≠ S2`, or the
 two handshake packets come out the same size and become a recognisable pair;
@@ -765,36 +778,33 @@ actually left after the other one, so a drawn set always saves; when there is no
 room, the field comes back at `0` or empty with a sentence saying which setting
 took the space, rather than a value the save would then reject.
 
-The advanced group is left empty on a fresh install, on purpose. Those settings
-were added in AmneziaWG 3.0 (and 3.1 for `RandomTrailers`; 3.1's other addition,
-`DisableCookies`, is server-side and sits on the Server page instead) and the
-values shown are the ones the protocol already uses, so writing them changes
-nothing; setting them to anything else breaks every peer that does not speak
-that version — which is still most of them — along with every peer that imported
-a `.conf` through the Amnezia app, whose importer discards the lines without a
-word. The panel badges the whole group as a beta feature for that reason.
+`install.sh` leaves the advanced group empty, on purpose: those settings were
+added in AmneziaWG 3.0 (and 3.1 for `RandomTrailers`; 3.1's other addition,
+`DisableCookies`, is server-side and sits on the Server page instead), and the
+installer has no way to know what the fleet runs. The panel does — it is where
+the clients are issued — so that is where the group is filled in.
 
-### Filling in the advanced group
+### The advanced group
 
-Empty is the right default and a poor place to be stuck. Once every peer really
-is on 3.0 (or 3.1 for `RandomTrailers`), the group is the strongest thing this
-server offers, and it used to be eight empty boxes an admin was expected to fill
-in from the protocol specification — which is the same mistake a fixed
-obfuscation profile would be. A value everybody copies out of one document is a
-constant, not a setting, and the timers say precisely how often this server
-handshakes.
+It used to be eight empty boxes an admin was expected to fill in from the
+protocol specification, which is the same mistake a fixed obfuscation profile
+would be. A value everybody copies out of one document is a constant, not a
+setting, and the timers say precisely how often this server handshakes.
 
-So the card has *Generate*, which takes the same four profiles and draws the
-whole group as one consistent set: a fresh 32-byte header protection key,
-random trailers switched on, and timers that interlock. `RejectAfterTime` is derived rather than drawn, because
-it has to outlast a whole rekey cycle rather than the longest single timer in
-it — a peer starts a handshake at `RekeyAfterTime` and may then spend
-`KeepaliveTimeout` + `RekeyTimeout` waiting for the answer, so the three add up.
-It is also the number the far end measures its own key against, and a responder
-that reaches the threshold first starts handshaking on top of the initiator. The
-DPI-resistant band stretches the timers rather than shortening them: a handshake
-is the one event on the wire that obfuscation cannot make cheap, so fewer of
-them is the point.
+So *Reconfigure* draws them with everything else, out of a second preset table
+under the same four profile names: a fresh 32-byte header protection key,
+content padding, and timers that interlock. The bands are not the obfuscation
+bands, because nothing here trades bandwidth. What *DPI-resistant* buys on this
+side is a handshake that happens less often — the one event on the wire that
+obfuscation cannot make cheap — so it stretches the timers rather than
+shortening them.
+
+`RejectAfterTime` is derived rather than drawn, because it has to outlast a
+whole rekey cycle rather than the longest single timer in it — a peer starts a
+handshake at `RekeyAfterTime` and may then spend `KeepaliveTimeout` +
+`RekeyTimeout` waiting for the answer, so the three add up. It is also the
+number the far end measures its own key against, and a responder that reaches
+the threshold first starts handshaking on top of the initiator.
 
 `ContentPaddingAddition` comes back as a range, never a number. The kernel uses
 it *instead of* the padding it does anyway — without it every packet is rounded
@@ -805,26 +815,31 @@ that rounding buys it back, and the generator will not draw one that does not.
 Anything the installed module cannot do is left empty instead: it would be an
 error at save time, not a silent drop.
 
-`RandomTrailers` is the one setting on this card with nothing to copy: there is
-no value to agree on, only on or off. It arrived in AmneziaWG 3.1 and both ends
-still have to have it — a peer without it measures an arriving handshake, finds
-it longer than expected, and drops it with no error at either end. It also does
+`RandomTrailers` is drawn **off**, and is the only member of the group that is.
+Everything else here arrived in 3.0, which is what a current client speaks;
+trailers arrived in 3.1, one release newer, and a peer without them measures an
+arriving handshake, finds it longer than expected and drops it with no error at
+either end. So it stays the one thing an operator switches on deliberately, once
+they know the fleet is there. It is also the one setting on the page with
+nothing to copy — there is no value to agree on, only on or off — and it does
 nothing to data packets while `ContentPaddingAddition` is set: that one already
 decides their padding, and the two do not stack.
 
-The key the button draws also puts a floor under `S1`–`S4`, which live on the
-card above it. The nonce header protection is applied with is read off the front
-of the padding on each packet, so all four have to be at least 12 bytes or the
-kernel refuses the entire configuration — `awg setconf` fails, and since an
-obfuscation save restarts the interface, the tunnel goes down to apply a
-combination that will not bring it back. Every profile draws at or above that
-floor, the save refuses a set that is under it, and a config installed before the
-floor existed gets a sentence in the preview naming the fields to redraw.
+The key the button draws puts a floor under `S1`–`S4`, in the section above it.
+The nonce header protection is applied with is read off the front of the padding
+on each packet, so all four have to be at least 12 bytes or the kernel refuses
+the entire configuration — `awg setconf` fails, and since an obfuscation save
+restarts the interface, the tunnel goes down to apply a combination that will
+not bring it back. One draw cannot produce that pairing, which is the quiet
+argument for one button: the padding and the key come out of the same press, and
+every band starts at or above the floor. The save still refuses a set that is
+under it, for the config an API client assembles by halves.
 
-Beside it is *Clear*, which empties all eight at once. That is the way back, and
-doing it one field at a time is how an admin ends up with a half-set group that
-breaks older clients for no benefit at all. An empty value removes the line rather
-than blanking it, the same way an unused imitation slot does.
+There is no *Clear* beside it any more. It was the way back out of a beta — the
+group off, every client connecting again — and turning off a group the generator
+now fills in as a matter of course is not a button, it is emptying the fields.
+An empty value still removes the line rather than blanking it, the same way an
+unused imitation slot does, so `PUT api/v1/server` with `""` is the way back.
 
 ### Why the bands stop where they do
 

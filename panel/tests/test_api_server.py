@@ -475,57 +475,61 @@ def test_reconfigure_draws_s4_against_the_saved_mtu_not_a_requested_one(api, ser
         assert int(params["S4"]) <= 1440 - 1420
 
 
-def test_reconfigure_advanced_fills_the_whole_awg3_group(api, server_conf):
+def test_reconfigure_draws_the_whole_page_in_one_go(api, server_conf):
+    """One button, both halves. They were two scopes while the advanced group
+    was something an operator opted into; a draw that filled only one of them
+    now leaves the page describing two different servers."""
     api.put(api_url("server"), {"mtu": 1300}, format="json")
-    body = {"scope": "advanced", "profile": "standard"}
-    response = api.post(api_url("server/reconfigure"), body, format="json")
+    response = api.post(api_url("server/reconfigure"), {"profile": "standard"}, format="json")
 
     assert response.status_code == 200, response.content
     params = response.json()["params"]
-    assert set(params) == set(validate.ADVANCED_PARAMS)
+    assert {"Jc", "S1", "H1", "I1"} <= set(params)
+    assert set(validate.ADVANCED_PARAMS) <= set(params)
     assert params["HeaderProtectionKey"] and params["RekeyAfterTime"]
-    # Beside the obfuscation it will be saved with: the key puts a floor under
-    # padding this group does not contain, so on its own it validates against
-    # nothing.
-    beside = api.get(api_url("server")).json()["params"]
-    merged = {**beside, **params, "MTU": "1300"}
-    assert validate.validate_params(merged, features=get_controller().features()) == {}
+    assert (
+        validate.validate_params({**params, "MTU": "1300"}, features=get_controller().features())
+        == {}
+    )
 
 
-def test_reconfigure_advanced_touches_nothing_in_the_obfuscation_set(api, server_conf):
-    """The two halves of the page are set independently: an admin asking for
-    timers has not asked to have their junk sizes redrawn underneath them."""
-    body = {"scope": "advanced"}
-    params = api.post(api_url("server/reconfigure"), body, format="json").json()["params"]
-    assert not {"Jc", "S1", "H1", "I1"} & set(params)
+def test_reconfigure_leaves_random_trailers_off(api, server_conf):
+    """The one member of the group drawn as empty. Everything else arrived in
+    AmneziaWG 3.0, which is what a current client speaks; trailers arrived in
+    3.1, and a peer without them drops an arriving handshake for being longer
+    than it expects - with no error at either end."""
+    for _ in range(6):
+        params = api.post(api_url("server/reconfigure"), {}, format="json").json()["params"]
+        assert params["RandomTrailers"] == ""
 
 
-def test_reconfigure_advanced_says_the_group_needs_3_0_on_every_client(api, server_conf):
-    """Every one of these silently breaks a 2.x peer, so the preview has to
-    arrive carrying that sentence rather than leaving it to be discovered."""
-    body = {"scope": "advanced"}
-    warnings = api.post(api_url("server/reconfigure"), body, format="json").json()["warnings"]
-    assert any("3.0" in text for text in warnings), warnings
+def test_reconfigure_says_nothing_about_the_set_it_just_drew(api, server_conf):
+    """A draw that arrives carrying advice about itself is a draw nobody trusts.
+    The AmneziaWG 3.0 advisory used to fire on every one of these, because the
+    generator sets exactly the parameters it named."""
+    payload = api.post(api_url("server/reconfigure"), {}, format="json").json()
+    assert payload["warnings"] == [], payload["warnings"]
 
 
-def test_reconfigure_advanced_says_when_the_padding_it_drew_cannot_be_saved_yet(api, server_conf):
-    """The key this draws is checked against S1-S4, which are on the other card.
-    An install from before the floor existed can have padding below it, and then
-    the sentence has to name the fields - being told to fix something the button
-    left alone is otherwise indistinguishable from the button being broken."""
+def test_reconfigure_redraws_padding_the_key_can_be_carried_by(api, server_conf):
+    """The key puts a floor under S1-S4, and an install from before that floor
+    existed can be under it. It used to be a sentence telling the operator to go
+    and redraw the other card; the other card is drawn by the same button now,
+    so the short padding is simply replaced along with everything else."""
     api.put(api_url("server"), {"params": {"S2": "8"}}, format="json")
-    payload = api.post(api_url("server/reconfigure"), {"scope": "advanced"}, format="json").json()
+    payload = api.post(api_url("server/reconfigure"), {}, format="json").json()
 
     assert payload["params"]["HeaderProtectionKey"]
-    assert any("S2" in text for text in payload["warnings"]), payload["warnings"]
+    assert int(payload["params"]["S2"]) >= validate.HEADER_NONCE
+    assert payload["warnings"] == [], payload["warnings"]
 
 
 @pytest.mark.parametrize("profile", ["standard", "dpi", "fast", "random"])
-def test_reconfigure_advanced_draws_content_padding_as_a_range(api, server_conf, profile):
+def test_reconfigure_draws_content_padding_as_a_range(api, server_conf, profile):
     """A single number is worse than an empty field: the kernel uses this
     instead of the 16-byte rounding it does anyway, so a constant addition
     replaces a length known to within 16 bytes with one known exactly."""
-    body = {"scope": "advanced", "profile": profile}
+    body = {"profile": profile}
     for _ in range(12):
         value = api.post(api_url("server/reconfigure"), body, format="json").json()["params"][
             "ContentPaddingAddition"
@@ -534,34 +538,34 @@ def test_reconfigure_advanced_draws_content_padding_as_a_range(api, server_conf,
 
 
 @pytest.mark.parametrize("profile", ["standard", "dpi", "fast", "random"])
-@pytest.mark.parametrize("other", ["standard", "dpi", "fast", "random"])
-def test_anything_the_generator_draws_can_actually_be_saved(api, server_conf, profile, other):
+def test_anything_the_generator_draws_can_actually_be_saved(api, server_conf, profile):
     """The property that matters more than any single bound.
 
-    Both buttons are pressed in the same sitting and neither can see what the
-    other was asked for, yet the key the second writes is refused unless the
-    padding the first drew is long enough to carry its nonce. Every pairing has
-    to save, or the operator is left with a button that fills the form in and a
-    Save that will not take it - or worse, one that takes it and an interface
-    that does not come back.
+    The header protection key is refused unless the padding drawn beside it is
+    long enough to carry its nonce, and the two come from different preset
+    tables under one profile name. Every profile has to save, or the operator is
+    left with a button that fills the form in and a Save that will not take it -
+    or worse, one that takes it and an interface that does not come back.
     """
-    for scope, chosen in (("obfuscation", profile), ("advanced", other)):
-        body = {"scope": scope, "profile": chosen}
-        drawn = api.post(api_url("server/reconfigure"), body, format="json")
-        assert drawn.status_code == 200, drawn.content
-        saved = api.put(api_url("server"), {"params": drawn.json()["params"]}, format="json")
-        assert saved.status_code == 200, (scope, chosen, saved.content)
+    drawn = api.post(api_url("server/reconfigure"), {"profile": profile}, format="json")
+    assert drawn.status_code == 200, drawn.content
+    saved = api.put(api_url("server"), {"params": drawn.json()["params"]}, format="json")
+    assert saved.status_code == 200, (profile, saved.content)
 
 
 def test_a_generated_key_cannot_be_saved_onto_padding_too_short_for_it(api, server_conf):
     """The failure this whole floor exists for. The kernel refuses the device
     configuration rather than the parameter, and an obfuscation save restarts
     the interface - so without this the panel takes the tunnel down to apply a
-    combination that will not bring it back."""
+    combination that will not bring it back.
+
+    The generator cannot produce this pairing any more - it draws the padding
+    and the key together - so the key is saved on its own, which is what an API
+    client sending half a preview does."""
     assert api.put(api_url("server"), {"params": {"S4": "8"}}, format="json").status_code == 200
-    key = api.post(api_url("server/reconfigure"), {"scope": "advanced"}, format="json").json()[
-        "params"
-    ]["HeaderProtectionKey"]
+    key = api.post(api_url("server/reconfigure"), {}, format="json").json()["params"][
+        "HeaderProtectionKey"
+    ]
 
     refused = api.put(api_url("server"), {"params": {"HeaderProtectionKey": key}}, format="json")
 
@@ -570,11 +574,10 @@ def test_a_generated_key_cannot_be_saved_onto_padding_too_short_for_it(api, serv
 
 
 def test_saving_a_generated_advanced_set_writes_and_clearing_it_removes(api, server_conf):
-    """The two buttons on the advanced card, end to end. Clearing has to leave
-    absent lines rather than blank ones, the same way an unused decoy slot does."""
-    params = api.post(api_url("server/reconfigure"), {"scope": "advanced"}, format="json").json()[
-        "params"
-    ]
+    """The advanced group end to end. Clearing is no longer a button, but it is
+    still what an empty field means, and it has to leave absent lines rather
+    than blank ones - the same way an unused decoy slot does."""
+    params = api.post(api_url("server/reconfigure"), {}, format="json").json()["params"]
     assert api.put(api_url("server"), {"params": params}, format="json").status_code == 200
 
     written = server_conf.read_text(encoding="utf-8")
@@ -643,21 +646,29 @@ def test_a_module_installed_but_not_yet_loaded_is_said_out_loud(api, monkeypatch
 def test_a_disabled_cookie_reply_keeps_saying_so_on_the_status_page(api):
     """The save is where an admin first hears what the switch costs, but it is
     not the last word: a server not answering a flood is a live condition, so
-    the sentence stands on server/status for as long as the switch is on - the
-    same rule the importer advisories are held to. read_server carries the
-    server-only params for exactly this, and nothing else would notice if it
-    stopped.
+    the sentence stands on server/status for as long as the switch is on.
+    read_server carries the server-only params for exactly this, and nothing
+    else would notice if it stopped.
+
+    Both endpoints saying it is deliberate and is checked here, because for one
+    moment they say it at once - the PUT answers, and the status query behind
+    the notice at the top of the page catches up - and the Server page had been
+    rendering both, one paragraph about cookie replies printed out twice. The
+    page drops the line from the save's block once the standing one carries it;
+    what neither end may do is stop saying it.
     """
     assert not [text for text in _status_warnings(api) if "DisableCookies" in text]
 
-    assert (
-        api.put(api_url("server"), {"params": {"DisableCookies": "on"}}, format="json").status_code
-        == 200
-    )
+    saved = api.put(api_url("server"), {"params": {"DisableCookies": "on"}}, format="json")
+    assert saved.status_code == 200, saved.content
+    assert [text for text in saved.json()["warnings"] if "DisableCookies" in text]
 
     standing = [text for text in _status_warnings(api) if "DisableCookies" in text]
     assert standing, _status_warnings(api)
     assert "cookie challenge" in standing[0]
+    # Word for word the same sentence, which is what lets the page recognise it
+    # as one thing said twice rather than two things that happen to overlap.
+    assert standing == [text for text in saved.json()["warnings"] if "DisableCookies" in text]
 
     api.put(api_url("server"), {"params": {"DisableCookies": ""}}, format="json")
     assert not [text for text in _status_warnings(api) if "DisableCookies" in text]

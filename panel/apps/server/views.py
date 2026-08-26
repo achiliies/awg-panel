@@ -142,12 +142,25 @@ class ReconfigureObfuscationView(APIView):
     any other edit, because applying this costs every client a re-import and
     that is not a thing to do on one click.
 
-    Two scopes, because the page has two halves that are set independently. The
-    default one is the obfuscation every client speaks. The other is the
-    advanced group, and it is the one that has to be filtered here: a
-    parameter the installed module cannot do is an error at save time rather
-    than a silent drop, so generating one would hand the admin a set that
-    cannot be saved. What was left out is said out loud instead.
+    One draw covers the whole page. It used to be two, behind a `scope`: the
+    obfuscation every client speaks, and the AmneziaWG 3.0 group that almost
+    none of them did. That second half was a beta an operator opted into, so
+    redrawing the junk sizes could not be allowed to hand out a header
+    protection key as well. The clients caught up, the group became part of what
+    a server is configured with rather than an experiment on top of it, and two
+    buttons for one profile then meant an operator could leave the page half
+    drawn - or draw each half from a different band, which is two sets of
+    numbers that were never meant to describe the same server.
+
+    The two preset tables stay two. `profile` names a band in each, and the
+    values behind that name are not the same on both sides: the obfuscation
+    bands trade bandwidth for cover, the advanced ones trade how often this
+    server handshakes at all. One name, two tables, one consistent set.
+
+    The advanced half is the one that has to be filtered here: a parameter the
+    installed module cannot do is an error at save time rather than a silent
+    drop, so generating one would hand the admin a set that cannot be saved.
+    What was left out is said out loud instead.
 
     Whatever is drawn has to be savable, which decides where the numbers behind
     it come from: the config, always, and never the form. S4 is measured against
@@ -161,31 +174,54 @@ class ReconfigureObfuscationView(APIView):
     def post(self, request: Request) -> Response:
         options = ReconfigureSerializer(data=request.data)
         options.is_valid(raise_exception=True)
-        wanted = options.validated_data
+        profile = options.validated_data["profile"]
 
         try:
             server = store.read_server()
         except AwgError:
             server = None
         mtu = server.mtu if server else 0
-        profile = wanted["profile"]
 
-        if wanted["scope"] == "advanced":
-            params, warnings = _advanced_preview(profile, server)
-        else:
-            params = validate.randomize(mtu=mtu or None, profile=profile)
-            warnings = validate.warnings_for({**params, "MTU": str(mtu)} if mtu else params)
-            # Coming back as 0 when the profile asked for more is the generator
-            # giving up on a value rather than choosing one, and it happens
-            # quietly - the field simply reads 0. It takes an MTU the panel will
-            # not save to get there, so the sentence points at the MTU.
-            if params["S4"] == "0" and validate.PROFILES[profile].s4[0]:
-                warnings.append(
-                    f"S4 was left off. It is added to every data packet and comes out of what "
-                    f"the MTU leaves, and an MTU of {mtu or validate.DEFAULT_MTU} leaves no room "
-                    f"for it: the largest that does is {validate.MTU_BUDGET - validate.HEADER_NONCE}. "
-                    "Lower the MTU on the Server page and save it, then draw this again."
-                )
+        params = validate.randomize(mtu=mtu or None, profile=profile)
+        advanced, unsupported = _advanced_draw(profile)
+        params.update(advanced)
+
+        # Before the advisories rather than after, so the set they describe is
+        # the set being handed back. The padding and the key are now drawn
+        # together, so the only way the prefix cannot carry the key's nonce is
+        # an MTU that left no room for S4 at all - and the answer to that is the
+        # key, not the padding: the MTU is on another page and a preview that
+        # kept the key would be one the save refuses.
+        short = validate.header_protection_short(params)
+        if short:
+            params["HeaderProtectionKey"] = ""
+
+        warnings = validate.warnings_for({**params, "MTU": str(mtu)} if mtu else params)
+        # Coming back as 0 when the profile asked for more is the generator
+        # giving up on a value rather than choosing one, and it happens
+        # quietly - the field simply reads 0. It takes an MTU the panel will
+        # not save to get there, so the sentence points at the MTU.
+        if params["S4"] == "0" and validate.PROFILES[profile].s4[0]:
+            warnings.append(
+                f"S4 was left off. It is added to every data packet and comes out of what "
+                f"the MTU leaves, and an MTU of {mtu or validate.DEFAULT_MTU} leaves no room "
+                f"for it: the largest that does is {validate.MTU_BUDGET - validate.HEADER_NONCE}. "
+                "Lower the MTU on the Server page and save it, then draw this again."
+            )
+        if short:
+            warnings.append(
+                f"HeaderProtectionKey was left empty: the nonce it is used with is read from the "
+                f"first {validate.HEADER_NONCE} bytes of the padding on each packet, and "
+                f"{', '.join(short)} has no room for one at this MTU. The kernel refuses that "
+                "combination outright, so it was not drawn. Lower the MTU on the Server page and "
+                "save it, then draw this again."
+            )
+        if unsupported:
+            warnings.append(
+                f"{', '.join(unsupported)} was left empty: the installed AmneziaWG does not "
+                "support it, and setting it would stop the config saving at all. Upgrade the "
+                "kernel module and tools to use it."
+            )
 
         return Response(ParamPreviewSerializer({"params": params, "warnings": warnings}).data)
 
@@ -296,45 +332,31 @@ class ServerStatusView(APIView):
 # ---------------------------------------------------------------- internals
 
 
-def _advanced_preview(
-    profile: str,
-    server: store.ServerView | None,
-) -> tuple[dict[str, str], list[str]]:
+def _advanced_draw(profile: str) -> tuple[dict[str, str], list[str]]:
     """Draw the advanced group, minus whatever this build cannot do.
 
-    The key this draws puts a floor under S1-S4, and those are on the other card
-    rather than this one, so a set drawn here can be refused by a save on
-    account of padding this never touched. It is checked against what is in the
-    config and said out loud, because the alternative is an operator pressing
-    Save on a form the generator filled in and being told the problem is in
-    fields it left alone.
+    Two returns rather than a preview of its own: the drawn values, and the
+    keys that were emptied because the installed module has no feature flag for
+    them. The caller owns the sentence, because it owns the rest of the set -
+    an advisory naming a parameter has to be beside the advisories naming the
+    ones drawn with it, in one list, in the order they matter.
+
+    Emptied rather than omitted. A key the response leaves out is a field the
+    form never hears about and therefore never clears, so a module that lost a
+    feature in a downgrade would leave the old value sitting in the form under a
+    sentence saying it could not be set.
     """
     features = get_controller().features()
 
     params = validate.randomize_advanced(profile=profile)
     unsupported = [
-        key for key in params if not bool(features.get(validate.FEATURE_OF.get(key, ""), True))
+        key
+        for key, value in params.items()
+        if value and not bool(features.get(validate.FEATURE_OF.get(key, ""), True))
     ]
     for key in unsupported:
         params[key] = ""
-
-    warnings = validate.warnings_for(params)
-    if unsupported:
-        warnings.append(
-            f"{', '.join(unsupported)} was left empty: the installed AmneziaWG does not support "
-            "it, and setting it would stop the config saving at all. Upgrade the kernel module "
-            "and tools to use it."
-        )
-    if params["HeaderProtectionKey"] and server:
-        short = validate.header_protection_short({**server.params, **params})
-        if short:
-            warnings.append(
-                f"{', '.join(short)} will have to be raised to at least {validate.HEADER_NONCE} "
-                "before this can be saved: the header protection key is used with a nonce read "
-                "from the front of that padding, and the kernel refuses a configuration where it "
-                "does not fit. Draw the obfuscation above again, which never goes below it."
-            )
-    return params, warnings
+    return params, unsupported
 
 
 def _annotate(row: dict, features: dict) -> dict:

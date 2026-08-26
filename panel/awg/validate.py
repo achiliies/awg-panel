@@ -26,23 +26,23 @@ exception and DisableCookies is its first member: an [Interface] setting the
 server keeps to itself, which is why it is not in `AWG_PARAMS` - that tuple is
 what gets copied into every client config.
 
-`importer_safe` is the hard-won part, and it is False for exactly the settings
-AmneziaWG 3.0 added: HeaderProtectionKey, ContentPaddingAddition and the timer
-overrides - and for RandomTrailers, which 3.1 added on the same terms.
-Two things have to be true before one of them is worth setting, and neither is
-visible from the server. The peer has to speak the release that added it - 3.0,
-or 3.1 for RandomTrailers - and most clients speak neither yet, so these are a
-beta feature from the operator's side whatever the server supports - and it has
-to have been given the value, which rules out the Amnezia app: it parses .conf
-files and discards those lines silently. What that costs
-depends on which one: a client without the header protection key cannot read a
-protected header at all, so the server refuses it and no error appears at either
-end, while the timers and the content padding are each end's own business and a
-client that never got them simply keeps the protocol's defaults - the tunnel
-works, and only one end is hiding anything.
-Imitation packets have the same trap one level down: the kernel
-accepts <t>, <c>, <rc> and <rd> tags, but the app rejects the whole file on
-import with error 1000.
+`importer_safe` is False for exactly the settings AmneziaWG 3.0 added:
+HeaderProtectionKey, ContentPaddingAddition and the timer overrides - and for
+RandomTrailers, which 3.1 added on the same terms. It records which release a
+parameter needs at the far end, which is a fact about the parameter and stays
+in the catalog for the UI to state on the field it belongs to. What it is no
+longer is a warning on every save: the clients caught up, 3.0 is what a current
+AmneziaWG build speaks, and a panel that kept telling an operator to clear the
+group would be arguing with the generator that fills it in.
+The one still worth knowing per parameter is what an old peer does with it: a
+client without the header protection key cannot read a protected header at all,
+so the server refuses it and no error appears at either end, while the timers
+and the content padding are each end's own business and a client that never got
+them simply keeps the protocol's defaults - the tunnel works, and only one end
+is hiding anything.
+Imitation packets have a trap of their own one level down: the kernel
+accepts <t>, <c>, <rc> and <rd> tags, but the Amnezia app rejects the whole file
+on import with error 1000.
 """
 
 import base64
@@ -719,15 +719,15 @@ _SPECS: list[ParamSpec] = [
         help_long=(
             "With a header protection key the whole AmneziaWG header is encrypted under a "
             "shared secret, so even the randomised H1-H4 values never appear on the wire. It "
-            "arrived with AmneziaWG 3.0, it is the strongest option this server offers, and "
-            "between two peers that both speak 3.0 it works perfectly. It is also the biggest "
-            "trap in this configuration, because most clients are not there yet: one still on "
-            "2.x has no idea the setting exists, and the Amnezia apps read .conf files and "
-            "throw the line away without a word. Either way the client connects without header "
-            "protection, the server rejects everything it sends, and nothing reports why - "
-            "just a tunnel that never comes up. Set it only once every peer is known to run "
-            "3.0 and is configured by hand, or through Amnezia's own JSON / vpn:// format. "
-            "Leave it empty otherwise. Accepts a 44-character base64 key or 64 hex characters. "
+            "arrived with AmneziaWG 3.0, which is what a current client speaks, and it is the "
+            "strongest option this server offers. It is also the least forgiving thing here if "
+            "a peer is behind: one still on 2.x has no idea the setting exists, and the "
+            "Amnezia apps read .conf files and throw the line away without a word. Either way "
+            "that client connects without header protection, the server rejects everything it "
+            "sends, and nothing reports why - just a tunnel that never comes up. So a peer "
+            "below 3.0, or one configured by importing a .conf rather than by hand or through "
+            "Amnezia's own JSON / vpn:// format, has to be brought up to date before this is "
+            "set. Accepts a 44-character base64 key or 64 hex characters. "
             "It also puts a floor under the padding sizes: the nonce this key is used with is "
             "read from the first 12 bytes of the S1-S4 prefix on each packet, so all four have "
             "to be at least 12 or the kernel refuses the configuration outright and the "
@@ -776,9 +776,8 @@ _SPECS: list[ParamSpec] = [
             "designed around. It has to stay well below RejectAfterTime or a key expires "
             "before its replacement is agreed and the tunnel stalls for a few seconds on every "
             "cycle. The timer overrides are AmneziaWG 3.0 additions, and the Amnezia app's "
-            "importer drops them besides, so a client keeps the protocol's own defaults while "
-            "the server does not - leave these empty unless every peer runs 3.0 and is "
-            "configured by hand."
+            "importer drops them besides, so a peer below 3.0, or one configured by importing "
+            "a .conf, keeps the protocol's own defaults while the server does not."
         ),
         must_match_client=True,
         importer_safe=False,
@@ -820,8 +819,8 @@ _SPECS: list[ParamSpec] = [
             "to exceed the keepalive timeout plus the handshake retry interval, and a value "
             "that breaks that leaves the tunnel dropping traffic while it renegotiates. Both "
             "ends should carry the same number, but only an AmneziaWG 3.0 client reads it at "
-            "all, and the app importer drops the line besides, so most clients will use 180 "
-            "whatever is set here."
+            "all, and the app importer drops the line besides, so a peer below 3.0, or one "
+            "configured by importing a .conf, will use 180 whatever is set here."
         ),
         must_match_client=True,
         importer_safe=False,
@@ -841,7 +840,7 @@ _SPECS: list[ParamSpec] = [
             "PersistentKeepalive, which is what a client sends to hold its NAT mapping open. "
             "Raising it cuts background chatter on a quiet link; lowering it notices a dead "
             "peer sooner at the cost of more traffic. An AmneziaWG 3.0 setting that the app's "
-            ".conf importer drops besides, so leave it empty unless every peer runs 3.0."
+            ".conf importer drops besides, so a peer below 3.0 keeps the default of 10."
         ),
         must_match_client=True,
         importer_safe=False,
@@ -882,7 +881,7 @@ _SPECS: list[ParamSpec] = [
             "byte in it is random. With this on, the module appends a trailer of random length "
             "to each packet it sends, handshakes and data alike, drawn against what the path "
             "has already carried so the padding never pushes a packet over the MTU. It is the "
-            "one setting on this card with nothing to copy: there is no value to agree on, "
+            "one setting on this page with nothing to copy: there is no value to agree on, "
             "only on or off. "
             "It arrived in AmneziaWG 3.1 and both ends still have to have it. A peer without "
             "it measures an arriving handshake, finds it longer than the one it expects and "
@@ -1262,27 +1261,23 @@ def warnings_for(values: dict[str, str]) -> list[str]:
     """
     out: list[str] = []
 
-    unsafe = [
-        key
-        for key, spec in PARAMS.items()
-        if not spec.importer_safe and _is_set(spec, _get(values, key))
-    ]
-    if unsafe:
-        out.append(
-            f"{', '.join(unsafe)}: these arrived with AmneziaWG 3.0 and 3.1, and each needs the "
-            "version that added it at both ends. A peer on an older release ignores them, and so "
-            "does one that imported a .conf through the Amnezia app, which discards these lines "
-            "without saying so. Either way that client negotiates without them, is rejected by "
-            "the server, and shows no error at all. Clear them, or make sure every peer is new "
-            "enough and is configured by hand."
-        )
+    # There is no advisory here for the AmneziaWG 3.0 and 3.1 settings, and its
+    # absence is deliberate. It used to list the whole advanced group on every
+    # save that set any of it, telling the operator to clear it unless every
+    # peer was new enough - true while the clients were behind, and noise now
+    # that they are not: the generator fills that group in as a matter of
+    # course, so the sentence fired on every draw and then stood in
+    # server/status for the life of the server. Which release a parameter needs
+    # is still in the catalog, on the field it belongs to, where it is read once
+    # by somebody deciding rather than repeated at somebody who already has.
 
     # Not "this will not work" like the rest of this function, but "this works
     # and costs you something you may not have meant to spend". Nothing about a
     # flood is visible from a settings page, so the save is where an admin first
-    # hears what the switch costs - and, like the importer advisories above, it
-    # then stands in server/status for as long as the switch is on, because a
-    # protection that is off is a live condition and not only a past decision.
+    # hears what the switch costs - and it then stands in server/status for as
+    # long as the switch is on, because a protection that is off is a live
+    # condition and not only a past decision. Being in both at once is what the
+    # Server page dedupes: the standing notice is the one that keeps it.
     if _is_set(PARAMS["DisableCookies"], _get(values, "DisableCookies")):
         out.append(
             "DisableCookies is on: this server no longer answers a handshake flood with a "
@@ -1417,14 +1412,14 @@ def randomize_advanced(
     *,
     profile: str = DEFAULT_PROFILE,
 ) -> dict[str, str]:
-    """Generate the advanced group: a header key, padding, the timers and the switch.
+    """Generate the advanced group: a header key, padding and the timers.
 
-    The group has no generator of its own until now, which left the strongest
-    settings the server offers as seven empty boxes an admin was expected to
-    fill in from the protocol specification. They are filled here for the same
-    reason the obfuscation above is: a value everyone copies out of the same
-    document is not a setting, it is a constant, and the timers in particular
-    say exactly how often this server handshakes.
+    Drawn alongside randomize() rather than instead of it - one Reconfigure
+    fills the whole page - and from ADVANCED_PROFILES, which is the second of
+    the two preset tables. The profile names are shared with PROFILES so that
+    one choice reaches both, but the bands are not: nothing here trades
+    bandwidth, and what "DPI-resistant" buys on this side is a handshake that
+    happens less often rather than a fatter one.
 
     Everything comes back as one consistent set, because these interlock.
     RejectAfterTime is derived rather than drawn: it has to outlast a whole
@@ -1438,16 +1433,16 @@ def randomize_advanced(
     what its own MTU leaves, so unlike S4 this one can never push a full-size
     packet over the path.
 
-    RandomTrailers comes back on. It is the one member of the group with
-    nothing to draw - there is no value, only a switch - and leaving it off
-    would make "fill in the advanced settings" quietly produce a group with a
-    hole in it. Every other setting here already costs a peer that is too old
-    its connection, which is what the confirmation in front of this asks about.
+    RandomTrailers comes back off, and is the one member of the group that
+    does. Everything else here arrived in AmneziaWG 3.0, which is what a current
+    client speaks; trailers arrived in 3.1, which is a release newer, and a peer
+    without them measures an arriving handshake, finds it longer than the one it
+    expects and drops it with no error at either end. So it is left as the one
+    thing an operator turns on deliberately once they know the fleet is there,
+    which is a switch on the page rather than a value to draw.
 
-    What this does not do is decide whether the group should be set at all.
-    Every one of these needs the AmneziaWG release that added it on the far
-    end - 3.0, or 3.1 for RandomTrailers - and the caller is what knows whether
-    the installed module even supports them.
+    What this does not do is decide whether the group should be set at all. The
+    caller is what knows whether the installed module supports these at all.
     """
     rng = rng or random.SystemRandom()
     band = ADVANCED_PROFILES.get(profile, _ADV_STANDARD)
@@ -1474,7 +1469,9 @@ def randomize_advanced(
         "RejectAfterTime": str(reject_after),
         "KeepaliveTimeout": str(keepalive),
         "MaxHandshakeAttempts": str(rng.randint(*band.attempts)),
-        "RandomTrailers": "on",
+        # Empty rather than "off": empty is how a save removes the line, and the
+        # line the kernel never sees is the one that cannot disagree with a peer.
+        "RandomTrailers": "",
     }
 
 

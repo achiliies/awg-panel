@@ -22,12 +22,11 @@ import { cn } from "@/lib/utils";
  * about the thing it marks that is not true.
  *
  * `caution` sits between the two, for a warning that repeats down a page. A
- * filled amber chip is right when there is one of it - the beta chip on a card
- * heading - and wrong when there are seven, one per field, because at that
- * point the colour has stopped marking anything out and is just the loudest
- * thing on screen. So the wording keeps the page's own text colour, which is
- * black on the light theme and white on the dark one, and the amber is spent on
- * the edge and a wash behind it instead.
+ * filled amber chip is right when there is one of it and wrong when there are
+ * seven, one per row, because at that point the colour has stopped marking
+ * anything out and is just the loudest thing on screen. So the wording keeps
+ * the page's own text colour, which is black on the light theme and white on
+ * the dark one, and the amber is spent on the edge and a wash behind it instead.
  */
 const badgeVariants = cva(
   [

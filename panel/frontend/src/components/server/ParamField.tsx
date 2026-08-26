@@ -27,25 +27,21 @@ import type { ParamSpec } from "@/api/types";
  * the preset picker at the top of the page already applies a whole coherent
  * set; the reasoning lives in the info popover and in docs/PANEL.md.
  *
- * The badges are the part people act on:
- *   amber edge  - the setting arrived with AmneziaWG 3.0, so a peer that has
- *                 not got there yet negotiates without it and the handshake
- *                 fails with nothing said at either end. This is the only one
- *                 that can cost you a working client, and the only one that
- *                 gets any colour at all. Amber rather than red because the
- *                 setting is not broken, it is early: the same value works
- *                 perfectly once the clients catch up. The chip is outlined
- *                 rather than filled, because every field in the AmneziaWG 3.0
- *                 group carries it - eight solid amber chips down one card
- *                 shout at an admin who has already read the first one, and
- *                 they drown out the beta chip on the heading, which is the
- *                 one thing there saying it about the group as a whole;
- *   small grey  - either the client has to carry the same value, or the value
- *                 never leaves the server. Both are facts about the parameter,
- *                 true of most of the page, and neither is a problem. Colour
- *                 them and the page reads as a wall of warnings with the one
- *                 real warning lost in it, so they are quiet chips and the
- *                 consequence is spelled out in the info popover instead.
+ * The badges say what kind of parameter this is: either the client has to carry
+ * the same value, or the value never leaves the server. Both are facts, true of
+ * most of the page, and neither is a problem - so they are quiet grey chips and
+ * the consequence is spelled out in the info popover instead. Colour them and
+ * the page reads as a wall of warnings with the one real warning lost in it.
+ *
+ * There was a third, in amber: "Needs AmneziaWG 3.0+", on every field of the
+ * advanced group. It was the truest badge on the page while the clients were
+ * behind - a peer without the release fails silently, which is the one thing
+ * here that can cost a working client. The clients caught up. What is left is
+ * eight amber chips down one card, naming a version that is now simply what an
+ * AmneziaWG client is, and a page that shouts everywhere cannot shout anywhere.
+ * Which release a setting arrived in is still in the popover, on the field it
+ * belongs to, because 3.1 is recent enough that random packet trailers are a
+ * decision rather than a default.
  */
 
 /** Kinds whose value is long enough that half a row would truncate it. */
@@ -205,7 +201,16 @@ export function ParamField({
   );
 }
 
-/** The badge row. Must-match and amber can both apply; grey only when neither does. */
+/**
+ * The badge row.
+ *
+ * "Server only" is not the complement of "must match": it says the value never
+ * leaves this machine, which is true of DisableCookies and not of
+ * MaxHandshakeAttempts - that one is each end's own retry behaviour, so the two
+ * do not have to agree and a client still has one of its own. The importer flag
+ * is what separates them, the same way it does in the popover below, so a
+ * parameter that is neither gets no chip rather than a wrong one.
+ */
 function ParamBadges({ spec }: { spec: ParamSpec }): JSX.Element {
   const { t } = useTranslation();
 
@@ -216,16 +221,11 @@ function ParamBadges({ spec }: { spec: ParamSpec }): JSX.Element {
           {t("server.mustMatch")}
         </Badge>
       ) : null}
-      {!spec.importerSafe ? (
-        <Badge variant="caution" size="sm">
-          {t("server.importerUnsafe")}
-        </Badge>
-      ) : null}
-      {spec.mustMatchClient || !spec.importerSafe ? null : (
+      {!spec.mustMatchClient && spec.importerSafe ? (
         <Badge variant="muted" size="sm">
           {t("server.serverOnly")}
         </Badge>
-      )}
+      ) : null}
       {spec.supported === false ? (
         <Badge variant="outline" size="sm">
           {t("server.unsupported")}

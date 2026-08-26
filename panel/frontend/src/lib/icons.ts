@@ -121,7 +121,6 @@ export {
   ArrowCounterClockwise, // Reset a client's counters
   ArrowUUpLeft, // Put one field back to its default
   Broom, // Clear out whatever is no longer wanted, in one sweep
-  Eraser, // Empty a whole group of settings at once
   ArrowSquareOut, // Leaves the panel
   QrCode,
   Note, // A client's free-text note

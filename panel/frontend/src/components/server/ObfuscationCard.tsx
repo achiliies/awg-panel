@@ -26,20 +26,29 @@ import type {
  * together, and above all they are generated together: the whole set is drawn
  * per server, and a value from one group is only as private as the rest.
  *
- * So the groups survive as headings inside one card rather than as four cards
- * with four separate save costs. They still come from the catalog, and their
- * titles and sentences still come from i18n by group id, so a group the API
- * adds later lands here with its own words and no change to this file.
+ * The advanced group is the fifth section, and it was a card of its own until
+ * the clients caught up. It sat below this one because it was a beta: header
+ * protection, content padding and the timers all arrived in AmneziaWG 3.0, and
+ * a peer that did not speak 3.0 failed silently, so the group started closed,
+ * carried a warning on its face and had a generator and a Clear of its own. A
+ * current client speaks 3.0. What is left is settings that belong to the same
+ * server as the four sections above them, drawn from the same profile, saved by
+ * the same button - so they are a section, and the page has one generator.
+ *
+ * The groups survive as headings inside one card rather than as five cards with
+ * five separate save costs. They still come from the catalog, and their titles
+ * and sentences still come from i18n by group id, so a group the API adds later
+ * lands here with its own words and no change to this file.
  *
  * Reconfigure fills the form; it does not save. Applying costs every client a
  * re-import, which is not a thing to do on one click, and the save bar already
  * says so in the words it uses for every other change.
  */
 
-const SUBSECTIONS: readonly ParamGroupId[] = ["junk", "sizes", "headers", "imitation"];
+const SUBSECTIONS: readonly ParamGroupId[] = ["junk", "sizes", "headers", "imitation", "advanced"];
 
 export interface ObfuscationCardProps {
-  /** The whole catalog. Only the four obfuscation groups are rendered. */
+  /** The whole catalog. Only the five obfuscation groups are rendered. */
   specs: ParamSpec[];
   values: Readonly<Record<string, string>>;
   changed: readonly string[];
@@ -90,7 +99,7 @@ export function ObfuscationCard({
 
   const run = (profile: ObfuscationProfile): void => {
     reconfigure.mutate(
-      { profile, scope: "obfuscation" },
+      { profile },
       {
         onSuccess: onReconfigure,
         onError: (error) => onReconfigureFailed(error.detail),

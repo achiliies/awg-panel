@@ -612,12 +612,17 @@ def test_save_server_backs_the_config_up_first(server_conf, conf_dir):
     assert list(conf_dir.glob("awg0.conf.bak-*"))
 
 
-def test_save_server_reports_the_importer_warnings(server_conf):
-    # Small enough to fit the fixture's MTU: the padding shares the per-packet
-    # budget with S4, and a value that overruns it is refused outright, which is
-    # a different test from this one.
+def test_save_server_says_nothing_about_a_setting_that_simply_works(server_conf):
+    """An AmneziaWG 3.0 value used to come back with an advisory naming the whole
+    group and asking whether every peer was new enough. They are, the generator
+    draws them by default, and a save that lectures about its own output is a
+    save whose warnings stop being read.
+
+    Small enough to fit the fixture's MTU: the padding shares the per-packet
+    budget with S4, and a value that overruns it is refused outright, which is
+    a different test from this one."""
     result = store.save_server({"ContentPaddingAddition": "16"})
-    assert any("Amnezia app" in text for text in result["warnings"])
+    assert result["warnings"] == []
 
 
 # --------------------------------------------------------- the tunnel subnet

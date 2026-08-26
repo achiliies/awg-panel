@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   HardDrives,
   Network,
@@ -76,7 +77,38 @@ export default function ServerConfig(): JSX.Element {
   const bandwidth = useBandwidthForm();
 
   const ifaceUp = status.data?.ifaceUp ?? true;
-  const statusWarnings = status.data?.warnings ?? [];
+  const statusWarnings = React.useMemo(() => status.data?.warnings ?? [], [status.data]);
+
+  /*
+   * The same sentence, twice on one page.
+   *
+   * Some of what a save reports is not about the save: turning DisableCookies
+   * on comes back as a warning from the PUT, and then stands in server/status
+   * for as long as the switch is on, because it describes a live condition and
+   * not only a past decision. Both are right, and both are rendered here - the
+   * standing block at the top and the save's own block under it - so the
+   * operator read one paragraph about cookie replies printed out twice.
+   *
+   * The standing one keeps it. It is the one that is still true tomorrow, and
+   * it is above the other. Nothing is lost in the moment before the status
+   * query catches up either: the notice cannot say it yet, so the save's block
+   * does, and it drops the line as soon as the block above picks it up.
+   */
+  const notes = React.useMemo(() => {
+    if (!form.notes) {
+      return null;
+    }
+    const standing = new Set(statusWarnings);
+    const warnings = form.notes.warnings.filter((warning) => !standing.has(warning));
+    if (warnings.length === form.notes.warnings.length) {
+      return form.notes;
+    }
+    // Taking the last line out can leave a block with nothing in it: the same
+    // emptiness the form already treats as "no banner to draw", so it is
+    // answered the same way rather than with an empty box the page scrolls to.
+    const outstanding = form.notes.mustReimport || (form.notes.needsRestart && !form.notes.applied);
+    return outstanding || warnings.length > 0 ? { ...form.notes, warnings } : null;
+  }, [form.notes, statusWarnings]);
 
   /*
    * The two drafts, counted and saved as one. They go to two endpoints and only
@@ -222,8 +254,8 @@ export default function ServerConfig(): JSX.Element {
           </Notice>
         ) : null}
 
-        {form.notes ? (
-          <SaveNotices ref={form.notesRef} notes={form.notes} onDismiss={form.dismissNotes} />
+        {notes ? (
+          <SaveNotices ref={form.notesRef} notes={notes} onDismiss={form.dismissNotes} />
         ) : null}
 
         {groups.map((group) => renderGroup(group))}

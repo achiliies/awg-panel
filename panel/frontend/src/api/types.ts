@@ -740,10 +740,13 @@ export interface ParamSpec {
 }
 
 /**
- * A freshly drawn obfuscation set from POST server/reconfigure, returned as a
- * preview: nothing is saved until PUT server. An empty value is meaningful and
- * has to be kept - the generated decoy session is one to five packets long, so
- * the unused imitation slots come back blank so the save removes them.
+ * A freshly drawn set from POST server/reconfigure, returned as a preview:
+ * nothing is saved until PUT server. It covers the whole Obfuscation page -
+ * junk, sizes, headers, imitation and the advanced group behind them. An empty
+ * value is meaningful and has to be kept: the generated decoy session is one to
+ * five packets long, so the unused imitation slots come back blank for the save
+ * to remove, and so does RandomTrailers, which is left off to be turned on
+ * deliberately.
  */
 export type ParamPreview = Record<string, string>;
 
@@ -752,13 +755,19 @@ export type ParamPreview = Record<string, string>;
  * what a draw costs and how much of the protocol's shape it hides. `random`
  * spans the other three, so that the choice of profile is not itself something
  * to fingerprint a server by.
+ *
+ * One name, two tables. The obfuscation bands trade bandwidth for cover; the
+ * advanced ones trade how often the server handshakes at all, which is the one
+ * event on the wire obfuscation cannot make cheap. A draw reads the name in
+ * both, so the whole page describes one server rather than two.
  */
 export type ObfuscationProfile = "standard" | "dpi" | "fast" | "random";
 
-/** The obfuscation every client speaks, or the advanced group. */
-export type ReconfigureScope = "obfuscation" | "advanced";
-
 /**
+ * The profile is the whole body. A `scope` sat beside it while the AmneziaWG 3.0
+ * settings were a group an operator opted into separately; one draw now fills
+ * the page, from the band this names in each of the two preset tables.
+ *
  * Nothing here describes the form. An `mtu` and an `s4` were each passed once so
  * a preview could be drawn against a value the form held and the disk did not,
  * and both were the same mistake: a draw is checked at save time against the
@@ -767,7 +776,6 @@ export type ReconfigureScope = "obfuscation" | "advanced";
  */
 export interface ReconfigureInput {
   profile: ObfuscationProfile;
-  scope?: ReconfigureScope;
 }
 
 /** POST server/reconfigure: the drawn values, and what setting them will cost. */

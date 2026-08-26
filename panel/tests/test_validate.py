@@ -278,17 +278,16 @@ def test_a_second_address_of_one_family_is_rejected_rather_than_ignored():
 # ---------------------------------------------------------------- warnings
 
 
-def test_header_protection_key_warns_about_the_app_importer():
-    """It works between hand-configured peers and silently breaks every app user."""
-    warnings = validate.warnings_for({"HeaderProtectionKey": SAMPLE_KEY})
-
-    matching = [text for text in warnings if "HeaderProtectionKey" in text]
-    assert matching, warnings
-    text = matching[0]
-    assert "Amnezia app" in text
-    assert "no error" in text
-    # Never echo key material back into a message that ends up in the UI.
-    assert SAMPLE_KEY not in text
+def test_a_header_protection_key_is_not_warned_about_on_its_own():
+    """The advisory that used to fire here listed the whole AmneziaWG 3.0 group
+    on every save that set any of it, and told the operator to clear it unless
+    every peer was new enough. The clients caught up and the generator now fills
+    that group in as a matter of course, so the sentence was firing on its own
+    output and then standing in server/status for the life of the server. Which
+    release a parameter needs is a fact about the parameter, and it stays in the
+    catalog where it is read once."""
+    padded = {key: "32" for key in validate.HEADER_PROTECTED}
+    assert validate.warnings_for({**padded, "HeaderProtectionKey": SAMPLE_KEY}) == []
 
 
 def test_header_protection_key_is_still_valid_input():
@@ -298,9 +297,11 @@ def test_header_protection_key_is_still_valid_input():
     assert "HeaderProtectionKey" in check({"HeaderProtectionKey": "not-a-key"})
 
 
-def test_empty_advanced_parameters_produce_no_importer_warning():
-    values = {"HeaderProtectionKey": "", "ContentPaddingAddition": "", "RekeyAfterTime": ""}
-    assert not [text for text in validate.warnings_for(values) if "Amnezia app" in text]
+def test_a_whole_generated_advanced_group_is_warned_about_at_all():
+    """The set the button draws has to arrive with nothing to say for itself.
+    Anything else is a generator arguing with the page it just filled in."""
+    padded = {key: "32" for key in validate.HEADER_PROTECTED}
+    assert validate.warnings_for({**padded, **validate.randomize_advanced()}) == []
 
 
 def test_s4_larger_than_the_mtu_headroom_warns():
@@ -889,13 +890,13 @@ def test_off_is_only_unset_for_a_switch(key):
     assert key in check({key: "off"})
 
 
-def test_random_trailers_warns_about_the_app_importer_when_set():
-    """RandomTrailers arrived in 3.1 and the Amnezia app importer discards it silently,
-    so an app user fails to connect without any error message."""
-    warnings = validate.warnings_for({"RandomTrailers": "on"})
-    matching = [text for text in warnings if "RandomTrailers" in text]
-    assert matching, warnings
-    assert "Amnezia app" in matching[0]
+def test_random_trailers_is_the_one_thing_the_generator_leaves_off():
+    """Everything else in the group arrived in AmneziaWG 3.0, which is what a
+    current client speaks. Trailers arrived in 3.1, a release newer, and a peer
+    without them drops an arriving handshake for being longer than it expects -
+    so they stay a switch somebody turns on, not a value drawn for them."""
+    assert validate.randomize_advanced()["RandomTrailers"] == ""
+    assert validate.warnings_for({"RandomTrailers": "on"}) == []
 
 
 def test_random_trailers_requires_module_feature_support():

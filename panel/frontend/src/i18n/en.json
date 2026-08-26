@@ -514,11 +514,7 @@
     "sizesHint": "Padding added to the four handshake message types, so their sizes stop being a fingerprint.",
     "headersHint": "The four message type markers. Plain WireGuard uses 1, 2, 3 and 4, which is the most obvious signature there is; large random values remove it.",
     "imitationHint": "Packets sent ahead of the handshake that copy the shape of ordinary traffic, so the connection opens like DNS, NTP, STUN or QUIC.",
-    "advancedHint": "AmneziaWG 3.0+ settings: header protection, content padding, timers and random trailers. The server supports them; most clients do not yet, which is why these are left empty.",
-    "beta": "Beta feature",
-    "advancedBeta": "New in AmneziaWG 3.0+, and the clients are still catching up",
-    "advancedBetaBody": "Every setting in this group was added in AmneziaWG 3.0 or 3.1. A peer only honours one of them if it runs AmneziaWG 3.0+ as well, and most do not yet - the Amnezia apps and the standalone clients are still shipping 2.x, and their .conf importer drops these lines without a word. Either way the client negotiates without the setting, the server refuses everything it sends, and neither end shows an error: the tunnel simply never comes up.",
-    "advancedBetaSafe": "Leaving the group empty costs nothing. The protocol already uses these values, and it is the obfuscation above that hides the traffic - that part works on every client. Set something here only once you know every peer runs AmneziaWG 3.0+ and is configured by hand or through Amnezia's own JSON / vpn:// format.",
+    "advancedHint": "Header protection, content padding and the protocol's own timers, all added in AmneziaWG 3.0. Reconfigure draws them with everything above; every client needs a 3.0 build to read them, which is what a current one is.",
 
     "listenPort": "Listening port",
     "address": "Server address",
@@ -545,9 +541,9 @@
     "obfuscationHint": "Everything that changes what the traffic looks like on the wire. All of it is generated for this server alone, and all of it has to match on every client.",
     "reconfigure": "Reconfigure",
     "reconfigureConfirm": "Draw a new obfuscation profile?",
-    "reconfigureConfirmBody": "Pick how much to hide and what to spend on it. Junk packets, padding sizes, header ranges and decoy packets are all replaced with fresh random values drawn from that band. Nothing is saved until you press Save, and once you do, every client has to import a new config.",
+    "reconfigureConfirmBody": "Pick how much to hide and what to spend on it. Junk packets, padding sizes, header ranges, decoy packets, the header protection key, content padding and the timers are all replaced with a fresh set drawn from that band. Random packet trailers are left off: they need AmneziaWG 3.1 rather than 3.0, so they stay a switch you turn on once you know every client has it. Nothing is saved until you press Save, and once you do, every client has to import a new config.",
     "reconfigureExplain": "What Reconfigure does",
-    "reconfigureExplainBody": "It draws a completely new set of obfuscation values for this server: how many junk packets go out before a handshake and how big they are, how much padding each handshake packet carries, where the four header ranges sit, and which protocol the decoy packets imitate. Nothing here affects throughput or latency - the values are bounded so a handshake stays cheap, and the padding on data packets always fits inside what the MTU leaves free.",
+    "reconfigureExplainBody": "It draws a completely new set of values for this server: how many junk packets go out before a handshake and how big they are, how much padding each handshake packet carries, where the four header ranges sit, which protocol the decoy packets imitate, and the header protection key, content padding and timers below them. Nothing here affects throughput or latency - the values are bounded so a handshake stays cheap, and the padding on data packets always fits inside what the MTU leaves free.",
     "reconfigureExplainCost": "Worth doing if the current settings may have been observed, and it is the only way to stop sharing a fingerprint with another server. The cost is that every client must import a new config afterwards, so hand out the new files before you restart.",
     "reconfigured": "New obfuscation profile drawn",
     "reconfigureFailed": "Could not generate a new profile",
@@ -565,8 +561,7 @@
     "mustMatchHint": "The client has to use exactly the same value. Changing it invalidates every config already handed out.",
     "serverOnly": "Server only",
     "serverOnlyHint": "Clients neither see nor need this value.",
-    "importerUnsafe": "Needs AmneziaWG 3.0+",
-    "importerUnsafeBody": "This setting arrived with AmneziaWG 3.0 or 3.1, so both ends have to support it before it does anything. An older client ignores it, and the Amnezia app never even sees it - its .conf importer drops the line silently. In both cases the client connects without the setting, the server rejects it, and no error appears on either end. Leave it empty unless every peer is known to support it.",
+    "importerUnsafeBody": "This setting arrived in AmneziaWG 3.0 - random packet trailers in 3.1 - so both ends need a build at least that new. A peer on an older release ignores the line, and so does one imported from a .conf through the Amnezia app, whose importer drops it silently. Either way that client connects without the setting, the server refuses it, and no error appears at either end.",
     "unsupported": "Not supported by this build",
     "unsupportedHint": "The installed kernel module or user-space tools are too old for this setting. Upgrade them, or leave it empty.",
     "howItWorks": "How obfuscation works",
@@ -641,18 +636,7 @@
       "fastHint": "The smallest draw that still hides the protocol. One or two junk packets, light padding and a short decoy session - for a metered or lossy mobile link, where every extra packet is another chance to lose the handshake.",
       "random": "Random",
       "randomHint": "Draws from all three bands at once. The other three are published, so a server built from one of them has said which; this one leaves nothing to recognise, at the price of not saying in advance what the draw will cost."
-    },
-
-    "advancedGenerate": "Generate",
-    "advancedGenerateConfirm": "Fill in the advanced settings?",
-    "advancedGenerateConfirmBody": "Draws a header protection key, content padding and a set of timers that fit together, and switches random trailers on. Nothing is saved until you press Save - and once you do, every peer not running AmneziaWG 3.0+ stops connecting, with no error shown at either end.",
-    "advancedGenerated": "Advanced settings drawn",
-    "advancedGeneratedBody": "Look them over and press Save to apply them.",
-    "advancedClear": "Clear",
-    "advancedClearConfirm": "Clear the advanced settings?",
-    "advancedClearConfirmBody": "Empties every field in the group, which turns it off: the protocol goes back to its own defaults and every client can connect again. The obfuscation above is untouched and keeps doing the hiding. Nothing is saved until you press Save.",
-    "advancedCleared": "Advanced settings cleared",
-    "advancedClearedBody": "Press Save to remove them from the server config."
+    }
   },
 
   "obfuscation": {

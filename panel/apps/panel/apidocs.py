@@ -760,7 +760,7 @@ CATALOG: tuple[Op, ...] = (
             "needsRestart": True,
             "mustReimport": True,
             "applied": True,
-            "warnings": ["ContentPaddingAddition is discarded by the Amnezia app importer."],
+            "warnings": ["DisableCookies is on: this server no longer answers a flood ..."],
         },
         codes=(
             ("400", "A parameter was rejected; `errors` carries a message per field."),
@@ -776,9 +776,10 @@ CATALOG: tuple[Op, ...] = (
         description=(
             "The single source of truth for the validation rules *and* the help text "
             "the UI renders, so the two cannot drift. `mustMatchClient` means changing "
-            "it invalidates every issued config; `importerSafe: false` means the Amnezia "
-            "mobile app silently discards the setting on import; `supported: false` means "
-            "the installed module or tools cannot do it.\n\n"
+            "it invalidates every issued config; `importerSafe: false` means the setting "
+            "arrived in AmneziaWG 3.0 (3.1 for `RandomTrailers`) and the Amnezia mobile "
+            "app silently discards it on import; `supported: false` means the installed "
+            "module or tools cannot do it.\n\n"
             "`recommended` names a *band* rather than a value for the obfuscation groups: "
             "a value this project recommended to everybody would be one every server "
             "shared, and a shared value is a signature."
@@ -810,20 +811,22 @@ CATALOG: tuple[Op, ...] = (
         description=(
             "Draws a complete, valid set for this server alone and returns it. **Nothing "
             "is saved** until you `PUT server` with it.\n\n"
+            "One draw covers the whole Obfuscation page: `Jc`-`I5` and the AmneziaWG 3.0 "
+            "group behind them. The profile names a band in each of the two preset "
+            "tables - the obfuscation bands trade bandwidth for cover, the advanced ones "
+            "trade how often the server handshakes at all.\n\n"
             "Every profile draws every value at random; they differ in the band, which is "
             "the trade between how much of the protocol's shape a value hides and what "
             "sending it costs. `random` spans the other three, so the choice of profile is "
             "not itself something to fingerprint a server by.\n\n"
-            "An empty `I` slot is meaningful, not missing: an empty value is how `PUT "
-            'server` spells "remove this line". Send the whole `params` object back '
-            "unchanged."
+            "An empty value is meaningful, not missing: it is how `PUT server` spells "
+            '"remove this line". That covers an unused `I` slot and `RandomTrailers`, '
+            "which is left off because it needs AmneziaWG 3.1 rather than 3.0. Send the "
+            "whole `params` object back unchanged."
         ),
-        body={"profile": "standard", "scope": "obfuscation"},
+        body={"profile": "standard"},
         body_required=False,
-        body_note=(
-            "Both optional. `profile` is standard, dpi, fast or random; `scope` is "
-            "obfuscation or advanced. `{}` means the defaults."
-        ),
+        body_note="Optional. `profile` is standard, dpi, fast or random; `{}` means standard.",
         result={
             "params": {
                 "Jc": "4",
@@ -833,10 +836,14 @@ CATALOG: tuple[Op, ...] = (
                 "H1": "1190147702-1504725727",
                 "I1": "<b 0x000100082112a442><r 12>",
                 "I4": "",
+                "HeaderProtectionKey": "xYbOANvXjB9HdbfeC92cefXNNd8U2iIXtvmnHMogkCs=",
+                "ContentPaddingAddition": "12-64",
+                "RekeyAfterTime": "163",
+                "RandomTrailers": "",
             },
             "warnings": [],
         },
-        codes=(("400", "An unknown profile or scope."),),
+        codes=(("400", "An unknown profile."),),
     ),
     Op(
         id="serverRestart",
