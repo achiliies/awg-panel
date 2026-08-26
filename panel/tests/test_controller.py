@@ -591,6 +591,10 @@ def test_sysfs_version_is_stripped(fake_sysfs):
 
 def test_module_loaded_reads_the_same_sysfs_root(fake_sysfs):
     """The two questions must not drift onto different paths."""
+    # Not `is False`: the fixture patches SYSFS_MODULE, but module_loaded falls
+    # back to the real /proc/modules, so the answer before the load is the host's
+    # to give. Only that it answers at all is testable here; the line below is
+    # what pins it to the same sysfs root.
     assert AwgController().module_loaded() in (True, False)
     fake_sysfs("3.1.20260812")
     assert AwgController().module_loaded() is True
