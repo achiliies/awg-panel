@@ -614,8 +614,8 @@ ranges; they are saved together, they invalidate every client config together,
 and above all they are *generated* together.
 
 The page is its own entry in the sidebar, between Server and Statistics, and the
-AmneziaWG 3.0 group sits below the card as its second half. That split is about
-how often each is touched rather than about where the values live — they are
+advanced group sits below the card as its second half. That split is about how
+often each is touched rather than about where the values live — they are
 one config behind one `PUT api/v1/server`. Where the tunnel listens is decided
 at install time and revisited when something about the network changes; what it
 looks like on the wire is redrawn, handed out and redrawn again, and costs every

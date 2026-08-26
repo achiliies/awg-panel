@@ -139,7 +139,7 @@ class ReconfigureSerializer(CamelCaseMixin, serializers.Serializer):
     """POST api/v1/server/reconfigure. Every field optional, so ``{}`` still works.
 
     ``scope`` says which half of the page asked: the obfuscation set every
-    client speaks, or the AmneziaWG 3.0 group that only a 3.0 peer understands.
+    client speaks, or the advanced group that only an AmneziaWG 3.0+ peer knows.
     They are drawn separately because they are set separately - an admin who
     redraws the junk sizes has not asked to be given a header protection key.
 

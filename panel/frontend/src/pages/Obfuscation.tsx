@@ -28,7 +28,7 @@ import type { ParamPreviewResult } from "@/api/types";
  * have to navigate to, and the save bar on it only ever talks about this.
  *
  * Two cards, in the order the cost rises. The obfuscation set works on every
- * client that exists. The AmneziaWG 3.0 group below it works on almost none of
+ * client that exists. The advanced group below it works on almost none of
  * them yet, and breaks the rest silently, which is why it comes second, starts
  * closed and carries its warning on its face.
  *
@@ -111,7 +111,7 @@ export default function Obfuscation(): JSX.Element {
 
   /*
    * Same again, except here the warning is the rule rather than the exception:
-   * every value the advanced generator draws needs AmneziaWG 3.0 at the far
+   * every value the advanced generator draws needs AmneziaWG 3.0+ at the far
    * end, and anything the installed module cannot do comes back empty with a
    * sentence saying so. Afterwards the form looks like a set that simply works.
    */

@@ -25,10 +25,11 @@ want a re-issue, but that is the store's call, not a property of the protocol.
 AmneziaWG 3.0 added: HeaderProtectionKey, ContentPaddingAddition and the timer
 overrides - and for RandomTrailers, which 3.1 added on the same terms.
 Two things have to be true before one of them is worth setting, and neither is
-visible from the server. The peer has to speak 3.0 at all - most clients do not
-yet, so these are a beta feature from the operator's side whatever the server
-supports - and it has to have been given the value, which rules out the Amnezia
-app: it parses .conf files and discards those lines silently. What that costs
+visible from the server. The peer has to speak the release that added it - 3.0,
+or 3.1 for RandomTrailers - and most clients speak neither yet, so these are a
+beta feature from the operator's side whatever the server supports - and it has
+to have been given the value, which rules out the Amnezia app: it parses .conf
+files and discards those lines silently. What that costs
 depends on which one: a client without the header protection key cannot read a
 protected header at all, so the server refuses it and no error appears at either
 end, while the timers and the content padding are each end's own business and a
@@ -302,7 +303,7 @@ DEFAULT_PROFILE = "standard"
 
 @dataclass(frozen=True)
 class AdvancedProfile:
-    """The same idea for the AmneziaWG 3.0 group, which trades different things.
+    """The same idea for the advanced group, which trades different things.
 
     Nothing here is about bandwidth. The timers decide how often a handshake
     happens at all, which is the one event on the wire that obfuscation cannot
@@ -1103,7 +1104,7 @@ _SPECS: list[ParamSpec] = [
 
 PARAMS: dict[str, ParamSpec] = {spec.key: spec for spec in _SPECS}
 
-# The AmneziaWG 3.0 group, read off the catalog rather than listed again here:
+# The advanced group, read off the catalog rather than listed again here:
 # it is what the generator fills and what "clear the advanced settings" empties,
 # and a second copy of the list is a second thing to forget to update.
 ADVANCED_PARAMS: tuple[str, ...] = tuple(
@@ -1354,7 +1355,7 @@ def randomize_advanced(
     *,
     profile: str = DEFAULT_PROFILE,
 ) -> dict[str, str]:
-    """Generate the AmneziaWG 3.0 group: a header key, padding and the timers.
+    """Generate the advanced group: a header key, padding, the timers and the switch.
 
     The group has no generator of its own until now, which left the strongest
     settings the server offers as seven empty boxes an admin was expected to
@@ -1382,8 +1383,9 @@ def randomize_advanced(
     its connection, which is what the confirmation in front of this asks about.
 
     What this does not do is decide whether the group should be set at all.
-    Every one of these needs AmneziaWG 3.0 on the far end, and the caller is
-    what knows whether the installed module even supports them.
+    Every one of these needs the AmneziaWG release that added it on the far
+    end - 3.0, or 3.1 for RandomTrailers - and the caller is what knows whether
+    the installed module even supports them.
     """
     rng = rng or random.SystemRandom()
     band = ADVANCED_PROFILES.get(profile, _ADV_STANDARD)

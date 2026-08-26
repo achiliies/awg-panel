@@ -588,8 +588,8 @@ export function useServerParams(): UseQueryResult<ParamSpec[], ApiError> {
  * it costs every client a re-import.
  *
  * The warnings come back with it and are worth showing. For the obfuscation
- * scope they are usually empty by construction; for the AmneziaWG 3.0 group
- * they are the point, because every value in it needs 3.0 at the far end.
+ * scope they are usually empty by construction; for the advanced group they
+ * are the point, because every value in it needs AmneziaWG 3.0+ at the far end.
  */
 export function useReconfigureObfuscation(): UseMutationResult<
   ParamPreviewResult,

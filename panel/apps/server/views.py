@@ -144,7 +144,7 @@ class ReconfigureObfuscationView(APIView):
 
     Two scopes, because the page has two halves that are set independently. The
     default one is the obfuscation every client speaks. The other is the
-    AmneziaWG 3.0 group, and it is the one that has to be filtered here: a
+    advanced group, and it is the one that has to be filtered here: a
     parameter the installed module cannot do is an error at save time rather
     than a silent drop, so generating one would hand the admin a set that
     cannot be saved. What was left out is said out loud instead.
@@ -300,7 +300,7 @@ def _advanced_preview(
     profile: str,
     server: store.ServerView | None,
 ) -> tuple[dict[str, str], list[str]]:
-    """Draw the AmneziaWG 3.0 group, minus whatever this build cannot do.
+    """Draw the advanced group, minus whatever this build cannot do.
 
     The key this draws puts a floor under S1-S4, and those are on the other card
     rather than this one, so a set drawn here can be refused by a save on

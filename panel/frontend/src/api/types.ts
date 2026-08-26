@@ -755,7 +755,7 @@ export type ParamPreview = Record<string, string>;
  */
 export type ObfuscationProfile = "standard" | "dpi" | "fast" | "random";
 
-/** The obfuscation every client speaks, or the AmneziaWG 3.0 group. */
+/** The obfuscation every client speaks, or the advanced group. */
 export type ReconfigureScope = "obfuscation" | "advanced";
 
 /**

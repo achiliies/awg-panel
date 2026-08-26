@@ -22,10 +22,12 @@ import { useReconfigureObfuscation } from "@/api/hooks";
 import type { ObfuscationProfile, ParamPreviewResult, ParamSpec } from "@/api/types";
 
 /*
- * The AmneziaWG 3.0 group: header protection, content padding and the timers.
+ * The advanced group: header protection, content padding, the timers and the
+ * random trailer switch.
  *
- * Everything above this card works on every client. Everything in it needs 3.0
- * at the far end, and a peer that is not there fails silently - it negotiates
+ * Everything above this card works on every client. Everything in it needs the
+ * AmneziaWG release that added it at the far end - 3.0, or 3.1 for random
+ * trailers - and a peer that is not there fails silently - it negotiates
  * without the setting, the server refuses it, and neither end says why. That is
  * what the badge and the note are for, and why the card starts closed.
  *
@@ -173,9 +175,9 @@ export function AdvancedCard({
  *
  * The badge on the heading is the warning; this is the part that stops it being
  * a shrug. Three things an admin needs before touching anything below it: these
- * are AmneziaWG 3.0 settings, a peer that is not on 3.0 fails without saying
- * why, and leaving the whole group empty costs nothing - the obfuscation above
- * is what does the hiding, and it works on every client.
+ * are AmneziaWG 3.0 and 3.1 settings, a peer without the one it is given fails
+ * without saying why, and leaving the whole group empty costs nothing - the
+ * obfuscation above is what does the hiding, and it works on every client.
  *
  * Its first line is set in the page's own text colour rather than in amber. The
  * amber box it sits in already says which kind of note this is, and the line
