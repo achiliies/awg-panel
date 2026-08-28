@@ -745,8 +745,9 @@ export interface ParamSpec {
  * junk, sizes, headers, imitation and the advanced group behind them. An empty
  * value is meaningful and has to be kept: the generated decoy session is one to
  * five packets long, so the unused imitation slots come back blank for the save
- * to remove, and so does RandomTrailers, which is left off to be turned on
- * deliberately.
+ * to remove. RandomTrailers comes back "on" like the rest of the advanced group;
+ * it is the one member that is a switch rather than a value, and "" is how the
+ * save turns it back off.
  */
 export type ParamPreview = Record<string, string>;
 

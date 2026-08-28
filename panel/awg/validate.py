@@ -929,16 +929,21 @@ _SPECS: list[ParamSpec] = [
             "has already carried so the padding never pushes a packet over the MTU. It is the "
             "one setting on this page with nothing to copy: there is no value to agree on, "
             "only on or off. "
-            "It arrived in AmneziaWG 3.1 and both ends still have to have it. A peer without "
-            "it measures an arriving handshake, finds it longer than the one it expects and "
-            "drops it, with no error at either end; the Amnezia app's .conf importer discards "
-            "the line, so a client imported that way is a client without it. "
+            "It arrived in AmneziaWG 3.1 and both ends still have to have it, which is why "
+            "it is the newest thing on this page. A peer without it measures an arriving "
+            "handshake, finds it longer than the one it expects and drops it, with no error at "
+            "either end; the Amnezia app's .conf importer discards the line, so a client "
+            "imported that way is a client without it - though where a header protection key "
+            "is set beside this one, that client was already turned away by the key, which "
+            "that importer drops too. Where there is no key, this is the only setting on the "
+            "page that stops an old client outright: the padding and the timers are ignored "
+            "rather than fatal. "
             "It also does nothing to data packets while ContentPaddingAddition is set - that "
             "one already decides their padding, and the two do not stack."
         ),
         must_match_client=True,
         importer_safe=False,
-        recommended="on, once every peer is known to run AmneziaWG 3.1",
+        recommended="on - drawn on, and every peer needs AmneziaWG 3.1",
     ),
     ParamSpec(
         key="DisableCookies",
@@ -1507,13 +1512,27 @@ def randomize_advanced(
     what its own MTU leaves, so unlike S4 this one can never push a full-size
     packet over the path.
 
-    RandomTrailers comes back off, and is the one member of the group that
-    does. Everything else here arrived in AmneziaWG 3.0, which is what a current
-    client speaks; trailers arrived in 3.1, which is a release newer, and a peer
-    without them measures an arriving handshake, finds it longer than the one it
-    expects and drops it with no error at either end. So it is left as the one
-    thing an operator turns on deliberately once they know the fleet is there,
-    which is a switch on the page rather than a value to draw.
+    RandomTrailers comes back on, and used to be the one member of the group
+    left off. Everything else here arrived in AmneziaWG 3.0; trailers arrived in
+    3.1, one release newer, and a peer without them measures an arriving
+    handshake, finds it longer than the one it expects and drops it with no error
+    at either end - so it waited for an operator who knew the fleet was there.
+    The fleet is there, and what this newly turns away depends on whether a
+    header protection key is beside it. Where there is one it is a peer on
+    exactly 3.0, anything older having already failed on the key and failed the
+    same silent way. Where there is not - the caller empties the key when the
+    server's MTU left S4 too short to carry its nonce - nothing else here fails
+    outright, because a peer too old for the padding or the timers ignores those
+    lines and stays up, so this switch is the only hard stop and it turns away
+    every client below 3.1. What was left either way was the strongest switch on
+    the page waiting for somebody to find it, which is the argument that used to
+    leave this whole group empty.
+
+    It is a switch rather than a value, so there is nothing for the two ends to
+    agree on beyond both having it, and it does nothing to data packets while
+    ContentPaddingAddition is set - that one already decides their padding. What
+    it covers is the handshake, whose length is otherwise the same every time
+    however random the bytes in it are.
 
     What this does not do is decide whether the group should be set at all. The
     caller is what knows whether the installed module supports these at all.
@@ -1555,9 +1574,12 @@ def randomize_advanced(
         "RejectAfterTime": _fmt_range(reject_after),
         "KeepaliveTimeout": _fmt_range(keepalive),
         "MaxHandshakeAttempts": _fmt_range(attempts),
-        # Empty rather than "off": empty is how a save removes the line, and the
-        # line the kernel never sees is the one that cannot disagree with a peer.
-        "RandomTrailers": "",
+        # "on" rather than a drawn value: parse_bool is the whole of what the
+        # tools read here. Off would still be spelled "" rather than "off" -
+        # empty is how a save removes the line, and a written "off" is a line
+        # that means nothing on either end and that every client config would
+        # then carry a copy of.
+        "RandomTrailers": "on",
     }
 
 

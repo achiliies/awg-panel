@@ -493,14 +493,19 @@ def test_reconfigure_draws_the_whole_page_in_one_go(api, server_conf):
     )
 
 
-def test_reconfigure_leaves_random_trailers_off(api, server_conf):
-    """The one member of the group drawn as empty. Everything else arrived in
-    AmneziaWG 3.0, which is what a current client speaks; trailers arrived in
-    3.1, and a peer without them drops an arriving handshake for being longer
-    than it expects - with no error at either end."""
+def test_reconfigure_draws_random_trailers_on(api, server_conf):
+    """It used to be the one member of the group drawn as empty, on the grounds
+    that it needs AmneziaWG 3.1 where the rest needs 3.0. Drawing it is what
+    makes the draw the whole page: a switch left off by the generator is one an
+    operator has to know to go and find, which is the argument that used to
+    leave this entire group empty.
+
+    A module without the feature is a different question, and the answer is one
+    level up: _advanced_draw empties any key the installed build cannot do and
+    the response says which. This fixture's controller can do all of them."""
     for _ in range(6):
         params = api.post(api_url("server/reconfigure"), {}, format="json").json()["params"]
-        assert params["RandomTrailers"] == ""
+        assert params["RandomTrailers"] == "on"
 
 
 def test_reconfigure_says_nothing_about_the_set_it_just_drew(api, server_conf):

@@ -728,17 +728,17 @@ that argues with the page it fills in is a generator nobody trusts.
 | `KeepaliveTimeout` | advanced | a range placed inside 8–15 s |
 | `MaxHandshakeAttempts` | advanced | a range placed inside 16–24 |
 | `RejectAfterTime` | advanced | derived, not drawn: the **tops** of `RekeyAfterTime` + `KeepaliveTimeout` + `RekeyTimeout`, plus 60–180 s, with its own width drawn from that same band |
+| `RandomTrailers` | advanced | on — a switch, not a draw, and the only row here with no band |
 
 The advanced rows are `install.sh` drawing from the second preset table, the one
 the panel calls `ADVANCED_PROFILES`, at its standard band. It used to leave that
-group empty; the reasoning is under [the advanced group](#the-advanced-group)
-below. The bands are not the obfuscation bands, because nothing in them trades
-bandwidth — the timers trade how often a handshake happens at all.
+group empty, and `RandomTrailers` stayed off for a release after the rest of it
+was drawn; the reasoning for both, and what the second change costs, is under
+[the advanced group](#the-advanced-group) below. The bands are not the
+obfuscation bands, because nothing in them trades bandwidth — the timers trade
+how often a handshake happens at all.
 
-The network group is not part of this and does have fixed values, and neither is
-`RandomTrailers`, which is left empty on purpose — the value beside it is what
-the protocol does anyway, so an empty field and that value mean the same thing
-on the wire:
+The network group is not part of this and does have fixed values:
 
 | Setting | Group | Value |
 |---|---|---|
@@ -748,7 +748,6 @@ on the wire:
 | `DNS` | network | `8.8.8.8, 8.8.4.4`, plus the two IPv6 resolvers where the tunnel carries IPv6 out |
 | `AllowedIPs` | network | `0.0.0.0/0, ::/0`, and `0.0.0.0/0` alone only where IPv6 is off |
 | `PersistentKeepalive` | network | 25 |
-| `RandomTrailers` | advanced | off — left empty by the installer and by the panel's generator alike |
 
 The rules behind the bands, in short: `Jmin` < `Jmax`; `S1 + 56 ≠ S2`, or the
 two handshake packets come out the same size and become a recognisable pair;
@@ -814,12 +813,19 @@ buys on this side is a handshake that happens less often — the one event on th
 wire that obfuscation cannot make cheap — so it stretches the timers rather than
 shortening them.
 
-**What this costs, stated plainly.** A peer that is not on AmneziaWG 3.0 will not
+`RandomTrailers` held out one release longer, because it needs 3.1 rather than
+3.0, and it is drawn now for the same reason the rest of the group is: a switch
+the generator leaves off is one nobody turns on. It has its own paragraph at the
+end of this section, including what it turns away.
+
+**What this costs, stated plainly.** A peer that is not on AmneziaWG 3.1 will not
 connect to a server installed or reconfigured this way, and neither will one set
 up by importing a `.conf` into the Amnezia app, if that importer still discards
-the lines. Both fail with no error at either end. Clearing the group — empty
-every field and save, or delete the lines from `awg0.conf` — puts the server back
-where it was.
+the lines. Both fail with no error at either end. The 3.1 in that sentence is
+`RandomTrailers` alone; everything else in the group needs 3.0. Clearing the
+group — empty every field and save, or delete the lines from `awg0.conf` — puts
+the server back where it was, and clearing `RandomTrailers` by itself puts back
+the 3.0 behaviour without giving up the rest.
 
 **The five timers are ranges, not numbers.** `awg setconf` parses each of them
 with `u16_range_from_string`, and the kernel calls `u16_range_pick_one` every
@@ -882,15 +888,48 @@ that rounding buys it back, and the generator will not draw one that does not.
 Anything the installed module cannot do is left empty instead: it would be an
 error at save time, not a silent drop.
 
-`RandomTrailers` is drawn **off**, and is the only member of the group that is.
-Everything else here arrived in 3.0, which is what a current client speaks;
-trailers arrived in 3.1, one release newer, and a peer without them measures an
+`RandomTrailers` is drawn **on**, and was the last member of the group to be. It
+covers the one thing the rest of the page does not: a handshake is the same
+length every time it is sent, which is a pattern to match on however random the
+bytes inside it are, and padding drawn per server does not change that — it
+moves the constant, it does not remove it. With the switch on, the kernel
+appends a trailer of random length to each packet, sized against what the path
+has already carried, so it can never push one over the MTU and there is no
+budget to charge it against.
+
+**What the switch costs, and it is not nothing.** Trailers arrived in 3.1 where
+the rest of the group arrived in 3.0, and a peer without them measures an
 arriving handshake, finds it longer than expected and drops it with no error at
-either end. So it stays the one thing an operator switches on deliberately, once
-they know the fleet is there. It is also the one setting on the page with
-nothing to copy — there is no value to agree on, only on or off — and it does
-nothing to data packets while `ContentPaddingAddition` is set: that one already
-decides their padding, and the two do not stack.
+either end. How much that costs depends on whether `HeaderProtectionKey` is set
+beside it, and the two cases are not close.
+
+**With a key**, this turns away a peer on exactly 3.0 and nothing more. Anything
+older than that, and anything set up by importing a `.conf` into the Amnezia app
+whose importer drops these lines, was already turned away by the key and turned
+away the same silent way.
+
+**Without one**, it turns away every client below 3.1. A server has no key when
+its MTU left `S4` too short to carry the nonce — `install.sh --mtu 1429` or
+higher, and *Reconfigure* on a server built that way — and nothing else in the
+group fails outright to cover for it: a client too old for the padding or the
+timers ignores those lines and stays connected, as the table in
+[A client stopped connecting](#troubleshooting) says. On that server this switch
+is the only hard stop in the config. If you run one, that is the case to think
+about before saving.
+
+What was left either way was the newest setting on the page waiting for an
+operator to know the fleet was there and go and find the switch — which is the
+argument that used to leave this whole group empty, and it is answered the same
+way. It is still a call about your own fleet: the module and tools `install.sh`
+builds are 3.1, and so are the official AmneziaWG apps under
+[Connect Your Devices](../README.md#connect-your-devices). The third-party and
+bundled clients listed there do not all state which AmneziaWG they carry.
+Clearing the field puts it back.
+
+It is also the one setting on the page with nothing to copy — there is no value
+to agree on, only on or off — and it does nothing to data packets while
+`ContentPaddingAddition` is set: that one already decides their padding, and the
+two do not stack. What it covers there is the handshake.
 
 The key the button draws puts a floor under `S1`–`S4`, in the section above it.
 The nonce header protection is applied with is read off the front of the padding

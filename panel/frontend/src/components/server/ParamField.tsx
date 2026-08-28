@@ -40,8 +40,11 @@ import type { ParamSpec } from "@/api/types";
  * eight amber chips down one card, naming a version that is now simply what an
  * AmneziaWG client is, and a page that shouts everywhere cannot shout anywhere.
  * Which release a setting arrived in is still in the popover, on the field it
- * belongs to, because 3.1 is recent enough that random packet trailers are a
- * decision rather than a default.
+ * belongs to. That is where random packet trailers say 3.1 rather than 3.0: they
+ * are drawn on like the rest of the group now, and who they turn away depends on
+ * whether a header protection key is set beside them - a peer on exactly 3.0
+ * where there is one, every peer below 3.1 where there is not. That is a
+ * paragraph to read on the field, and no chip could have carried it anyway.
  */
 
 /** Kinds whose value is long enough that half a row would truncate it. */

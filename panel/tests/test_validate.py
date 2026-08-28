@@ -1042,12 +1042,18 @@ def test_off_is_only_unset_for_a_switch(key):
     assert key in check({key: "off"})
 
 
-def test_random_trailers_is_the_one_thing_the_generator_leaves_off():
-    """Everything else in the group arrived in AmneziaWG 3.0, which is what a
-    current client speaks. Trailers arrived in 3.1, a release newer, and a peer
-    without them drops an arriving handshake for being longer than it expects -
-    so they stay a switch somebody turns on, not a value drawn for them."""
-    assert validate.randomize_advanced()["RandomTrailers"] == ""
+def test_random_trailers_is_drawn_on_with_the_rest_of_the_group():
+    """It used to be the one member left off: it arrived in AmneziaWG 3.1 rather
+    than 3.0, and a peer without it drops an arriving handshake for being longer
+    than it expects. Where a header protection key is drawn beside it that costs
+    the peers on exactly 3.0 and no more, anything older having already failed on
+    the key; where the MTU left no room for one it costs every peer below 3.1,
+    since nothing else here fails outright. Either way it is drawn like the rest
+    rather than waiting for somebody to find the switch.
+
+    "on" and not "off": off is spelled by removing the line, and a written "off"
+    is a line every client config would then carry a meaningless copy of."""
+    assert validate.randomize_advanced()["RandomTrailers"] == "on"
     assert validate.warnings_for({"RandomTrailers": "on"}) == []
 
 

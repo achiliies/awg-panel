@@ -38,12 +38,31 @@
 # not have them. So the installer draws what the panel draws, from the same
 # bands, and the two stay the pair this file has always been half of.
 #
-# RandomTrailers is the exception, and stays unset. It arrived in 3.1 rather
-# than 3.0 - one release newer - and a peer without it measures an arriving
-# handshake, finds it longer than the one it expects and drops it with no error
-# at either end. That is a switch to turn on once the fleet is known to be
-# there, which is the panel's job and not an installer's. Nothing below draws
-# it.
+# RandomTrailers is drawn with them, and used to be the exception. It arrived in
+# 3.1 rather than 3.0 - one release newer - and a peer without it measures an
+# arriving handshake, finds it longer than the one it expects and drops it with
+# no error at either end, so it was held back as a switch to turn on once the
+# fleet was known to be there. The fleet has moved: the module and tools this
+# installer builds are 3.1, and so are the official AmneziaWG clients the README
+# links to. Be plain about who is newly shut out, because somebody is.
+#
+# Where a header protection key was drawn, that is a peer on exactly 3.0:
+# anything older already fails on the key beside it, and fails the same silent
+# way. Where one was not - an --mtu of 1429 or more leaves S4 no room for the
+# nonce, and no key is written at all - there is nothing else in the config that
+# fails outright, because a peer too old for the padding or the timers ignores
+# those lines and stays up. On that server this switch is the only hard stop,
+# and it turns away every client below 3.1 rather than one release of them.
+# That is the cost, and --mtu is where it is paid.
+#
+# What was left either way was the strongest setting on the page waiting for an
+# operator to go and find a button, which is the argument that emptied the 3.0
+# group and is answered the same way.
+#
+# It is a switch rather than a value, so the two ends have nothing to agree on
+# beyond both having it, and it does nothing to data packets while
+# ContentPaddingAddition is set - that one already decides their padding. What
+# it covers is the handshake, whose length is otherwise the same every time.
 #
 # DisableCookies, 3.1's other addition, is left unset for a different reason:
 # not a client that cannot read it, but a default worth keeping. It suppresses
@@ -468,11 +487,11 @@ awg_supports() {
     return 0
 }
 
-# The header protection key, the content padding and the timers, drawn as one
-# consistent set. Sets HPK, CPA, REKEY_AFTER, REKEY_TIMEOUT, REJECT_AFTER,
-# KEEPALIVE_TIMEOUT and MAX_ATTEMPTS; any of them may come back empty, and an
-# empty one is a line the caller must not write rather than a value to write
-# blank.
+# The header protection key, the content padding, the trailer switch and the
+# timers, drawn as one consistent set. Sets HPK, CPA, RANDOM_TRAILERS,
+# REKEY_AFTER, REKEY_TIMEOUT, REJECT_AFTER, KEEPALIVE_TIMEOUT and MAX_ATTEMPTS;
+# any of them may come back empty, and an empty one is a line the caller must
+# not write rather than a value to write blank.
 #
 # Call after gen_sizes: the key is only drawn when the padding it would be
 # carried in can hold its nonce. Writing one over a shorter prefix is not a
@@ -481,7 +500,7 @@ awg_supports() {
 # --mtu allows and the panel does not.
 gen_advanced() {
     local MARGIN REJECT_LO REJECT_HI
-    HPK=""; CPA=""
+    HPK=""; CPA=""; RANDOM_TRAILERS=""
     REKEY_AFTER=""; REKEY_TIMEOUT=""; REJECT_AFTER=""
     KEEPALIVE_TIMEOUT=""; MAX_ATTEMPTS=""
 
@@ -506,6 +525,25 @@ gen_advanced() {
         local high
         high=$(rand_int "$OBFS_CPA_LO" "$OBFS_CPA_HI")
         (( high >= OBFS_PADDING_MULTIPLE )) && CPA="$(rand_int 0 $(( high / 3 )))-${high}"
+    fi
+
+    # On, and the only member of the group that is a switch rather than a draw.
+    # A handshake is the same length every time it is sent - that is a pattern
+    # to match on even when every byte inside it is random, and the one part of
+    # the profile that padding drawn per server does not touch, because what is
+    # constant is the length itself and not its value. The kernel appends a
+    # trailer of random length to each packet it sends, sized against what the
+    # path has already carried, so it never pushes one over the MTU and there is
+    # no budget to charge it against.
+    #
+    # "on" rather than a drawn value, because parse_bool is all the tools read
+    # here. The other state is the empty string and not the word "off": empty is
+    # how the caller is told to write no line at all, and a written
+    # `RandomTrailers = off` is a line that means nothing on either end. See the
+    # note at the top of this file for who this shuts out, and why that set is
+    # now a small one.
+    if awg_supports random-trailers; then
+        RANDOM_TRAILERS="on"
     fi
 
     # All five, because all five are written below. Asking about two of them

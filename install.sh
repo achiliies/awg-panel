@@ -1747,10 +1747,20 @@ fi
 # why. It is drawn now, because 3.0 is what a current AmneziaWG speaks and the
 # panel draws the group as part of one profile rather than as a beta behind a
 # second button - and a server whose strongest settings wait for an operator to
-# go and find that button is a server that mostly does not have them. lib/obfs.sh
-# asks the tools it just installed before writing any of it, and RandomTrailers
-# is still left out: that one arrived in 3.1, one release newer, and a peer
-# without it drops an arriving handshake for being longer than it expects.
+# go and find that button is a server that mostly does not have them.
+# lib/obfs.sh asks the tools it just installed before writing any of it.
+#
+# RandomTrailers is drawn too, and was the last thing held back. It arrived in
+# 3.1 rather than 3.0 and a peer without it drops an arriving handshake for
+# being longer than it expects. Where a header protection key was drawn it newly
+# shuts out a peer on exactly 3.0 and no more, everything below that having
+# already failed on the key and failed the same silent way. Where --mtu left S4
+# too short for a nonce there is no key, and nothing else in the config fails
+# outright - the padding and the timers are ignored by a client too old for
+# them - so this switch is the only hard stop and it shuts out everything below
+# 3.1. The module and tools this script builds are 3.1, and so are the official
+# AmneziaWG clients the README links to, which leaves the argument for holding
+# it back as "wait for somebody to find the button" and nothing else.
 #
 # Every one of them is drawn here rather than written as a constant. A value
 # this script ships the same to everybody is not obfuscation - it is a
@@ -1828,8 +1838,13 @@ if [[ -z "$REKEY_AFTER" ]]; then
     echo "$(t "  timers left at the protocol defaults: the installed AmneziaWG tools do not take them" \
               "  таймеры оставлены протокольными: установленные утилиты AmneziaWG их не принимают")"
 fi
-echo "$(t "  random packet trailers left off - they need AmneziaWG 3.1 on every client" \
-          "  случайные хвосты пакетов выключены — им нужен AmneziaWG 3.1 на каждом клиенте")"
+if [[ -n "$RANDOM_TRAILERS" ]]; then
+    echo "$(t "  random packet trailers on - every client needs AmneziaWG 3.1" \
+              "  случайные хвосты пакетов включены — каждому клиенту нужен AmneziaWG 3.1")"
+else
+    echo "$(t "  random packet trailers off: the installed AmneziaWG tools do not have them" \
+              "  случайные хвосты пакетов выключены: установленные утилиты AmneziaWG их не поддерживают")"
+fi
 
 # ------------------------------------------------- 7. server config
 step "$(t "Writing the server configuration" "Запись конфигурации сервера")"
@@ -1871,8 +1886,12 @@ done
 # blank. gen_advanced leaves a setting empty when the installed tools cannot
 # parse it, or - for the key alone - when the padding it would be carried in is
 # too short to hold its nonce, and `awg setconf` refuses a whole config over
-# either. RandomTrailers is not in the list because nothing draws it.
+# either. RandomTrailers is in the list on the same terms: it comes back "on" or
+# empty, and empty is the only spelling of off that leaves no line behind - a
+# written `RandomTrailers = off` is a line that means nothing on either end and
+# that the panel would then copy into every client config it issues.
 for SETTING in HeaderProtectionKey:HPK ContentPaddingAddition:CPA \
+               RandomTrailers:RANDOM_TRAILERS \
                RekeyAfterTime:REKEY_AFTER RekeyTimeout:REKEY_TIMEOUT \
                RejectAfterTime:REJECT_AFTER KeepaliveTimeout:KEEPALIVE_TIMEOUT \
                MaxHandshakeAttempts:MAX_ATTEMPTS; do

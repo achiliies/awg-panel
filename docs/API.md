@@ -784,7 +784,7 @@ the advanced group below them:
     "ContentPaddingAddition": "12-64",
     "RekeyAfterTime": "140-150", "RekeyTimeout": "5-6", "RejectAfterTime": "305-372",
     "KeepaliveTimeout": "8-15", "MaxHandshakeAttempts": "17-20",
-    "RandomTrailers": ""
+    "RandomTrailers": "on"
   },
   "warnings": []
 }
@@ -829,13 +829,27 @@ which is what a current client is; a parameter the installed module cannot do
 comes back empty with a sentence saying so, rather than producing a set that
 `PUT api/v1/server` would then reject.
 
-`RandomTrailers` comes back **empty**, and is the only thing here that does. It
-arrived in AmneziaWG 3.1 rather than 3.0 — one release newer — and a peer without
-it measures an arriving handshake, finds it longer than the one it expects and
-drops it with no error at either end. So it is left as the one switch an operator
-turns on deliberately once the fleet is known to be there. It is also a switch
-rather than a value, so there is nothing to copy between the two ends, and it
-does nothing to data packets while `ContentPaddingAddition` is set.
+`RandomTrailers` comes back as `"on"`, and is the only member of the set that is
+a switch rather than a value — there is nothing to copy between the two ends,
+only on or off. It used to come back empty: it arrived in AmneziaWG 3.1 rather
+than 3.0, and a peer without it measures an arriving handshake, finds it longer
+than the one it expects and drops it with no error at either end. That is a real
+cost and it is worth stating, and how much it costs depends on whether
+`HeaderProtectionKey` came back with it.
+
+Where it did, this newly turns away a peer on exactly 3.0 and nothing more:
+anything older, and anything imported from a `.conf` through the Amnezia app,
+already fails on the key beside it and fails the same silent way. Where it did
+not — the draw empties the key when the server's MTU left `S4` too short to
+carry its nonce — nothing else in the set fails outright, because a peer too old
+for the padding or the timers ignores those lines and stays connected. On that
+server `RandomTrailers` is the only hard stop in the config, and it turns away
+every client below 3.1. Send `""` back to remove the line.
+
+It does nothing to data packets while `ContentPaddingAddition` is set — that one
+already decides their padding, and the two do not stack. What it covers is the
+handshake, whose length is otherwise the same every time however random the bytes
+in it are.
 
 AmneziaWG 3.1's other addition, `DisableCookies`, is deliberately not drawn by
 either generator. It is a server-side switch — it

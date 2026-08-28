@@ -160,11 +160,15 @@ def check(number: int, values: dict[str, str]) -> None:
     if drawn and len(drawn) != len(timers):
         fail(number, f"only {len(drawn)} of {len(timers)} timers drawn: {drawn}")
 
-    # 3.1 rather than 3.0, and a peer without it drops an arriving handshake for
-    # being longer than it expects. That is the panel's switch to offer once the
-    # fleet is known, not a line for an installer to write blind.
-    if values.get("RandomTrailers"):
-        fail(number, "RandomTrailers was drawn; it needs 3.1 on every peer")
+    # Drawn on, and the assertion is that it stays drawn. It is the one setting
+    # here with no value to check - the failure it guards against is not a bad
+    # draw but a silent stop, a generator that quietly went back to leaving the
+    # newest setting on the page off. "on" and not "off": off is spelled by
+    # writing no line at all, and a written "off" is one every client config
+    # would carry a meaningless copy of.
+    trailers = values.get("RandomTrailers")
+    if trailers != "on":
+        fail(number, f"RandomTrailers={trailers!r}, expected 'on'")
 
     if drawn:
         check_advanced_bands(number, values)

@@ -820,9 +820,13 @@ CATALOG: tuple[Op, ...] = (
             "sending it costs. `random` spans the other three, so the choice of profile is "
             "not itself something to fingerprint a server by.\n\n"
             "An empty value is meaningful, not missing: it is how `PUT server` spells "
-            '"remove this line". That covers an unused `I` slot and `RandomTrailers`, '
-            "which is left off because it needs AmneziaWG 3.1 rather than 3.0. Send the "
-            "whole `params` object back unchanged."
+            '"remove this line", which is what an unused `I` slot comes back as. '
+            "`RandomTrailers` comes back on: it needs AmneziaWG 3.1 rather than the 3.0 "
+            "the rest of the advanced group needs. What it turns away is a peer on exactly "
+            "3.0 where `HeaderProtectionKey` comes back with it, since the key already "
+            "turned away anything older - and every peer below 3.1 where the MTU left no "
+            'room for a key, because nothing else here fails outright. `""` puts it back. '
+            "Send the whole `params` object back unchanged."
         ),
         body={"profile": "standard"},
         body_required=False,
@@ -839,7 +843,7 @@ CATALOG: tuple[Op, ...] = (
                 "HeaderProtectionKey": "xYbOANvXjB9HdbfeC92cefXNNd8U2iIXtvmnHMogkCs=",
                 "ContentPaddingAddition": "12-64",
                 "RekeyAfterTime": "140-150",
-                "RandomTrailers": "",
+                "RandomTrailers": "on",
             },
             "warnings": [],
         },

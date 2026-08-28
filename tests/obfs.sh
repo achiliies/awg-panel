@@ -56,8 +56,9 @@ for (( round = 0; round < ROUNDS; round++ )); do
         printf 'HeaderProtectionKey=%s\tContentPaddingAddition=%s\t' "$HPK" "$CPA"
         printf 'RekeyAfterTime=%s\tRekeyTimeout=%s\tRejectAfterTime=%s\t' \
                "$REKEY_AFTER" "$REKEY_TIMEOUT" "$REJECT_AFTER"
-        printf 'KeepaliveTimeout=%s\tMaxHandshakeAttempts=%s\n' \
+        printf 'KeepaliveTimeout=%s\tMaxHandshakeAttempts=%s\t' \
                "$KEEPALIVE_TIMEOUT" "$MAX_ATTEMPTS"
+        printf 'RandomTrailers=%s\n' "$RANDOM_TRAILERS"
     } >> "$WORK/profiles.tsv"
 done
 
@@ -70,9 +71,11 @@ RC=$?
 # from the first OBFS_HEADER_NONCE bytes of that prefix, so a key written over
 # a missing one is `awg setconf` returning EINVAL and an interface that never
 # comes up - on a box the operator is watching install itself. The key has to be
-# the thing that gives way, and the timers have to survive it: they are not
-# carried in the padding and have nothing to do with it.
-echo "  jumbo MTU: the key gives way, the timers do not"
+# the thing that gives way, and the timers and the trailer switch have to
+# survive it: neither is carried in the padding and neither has anything to do
+# with it. The trailer is sized by the kernel against what the path has already
+# carried, so there is no MTU it can be squeezed out of.
+echo "  jumbo MTU: the key gives way, the timers and the trailers do not"
 for mtu in 1429 1500 9000; do
     gen_obfuscation "$mtu"
     if [[ -n "$HPK" ]]; then
@@ -83,8 +86,12 @@ for mtu in 1429 1500 9000; do
         echo "  FAIL  MTU ${mtu} dropped the timers, which the padding does not carry"
         RC=1
     fi
+    if [[ "$RANDOM_TRAILERS" != "on" ]]; then
+        echo "  FAIL  MTU ${mtu} dropped the trailer switch, which the padding does not carry"
+        RC=1
+    fi
 done
-(( RC == 0 )) && echo "  ok    no key drawn at MTU 1429, 1500 or 9000; timers still drawn"
+(( RC == 0 )) && echo "  ok    no key drawn at MTU 1429, 1500 or 9000; timers and trailers still drawn"
 
 # What the generator returns, which nothing above this can see: this file runs
 # without `set -e` so that a failed check can be counted and reported rather
