@@ -522,7 +522,7 @@ def test_randomize_falls_back_to_the_default_mtu(mtu):
         assert 8 <= int(validate.randomize(mtu=mtu)["S4"]) <= 40
 
 
-def test_randomize_header_ranges_do_not_overlap_and_are_wide():
+def test_randomize_header_ranges_do_not_overlap_and_stay_narrow():
     for _ in range(ROUNDS):
         values = validate.randomize()
         bounds = sorted(
@@ -532,9 +532,38 @@ def test_randomize_header_ranges_do_not_overlap_and_are_wide():
             assert high < next_low, bounds
         assert bounds[0][0] >= validate.H_FLOOR
         assert bounds[-1][1] <= validate.H_MAX
-        # Narrow ranges repeat values, which is the constant they exist to avoid.
+        # Narrow, and that is the point rather than a compromise. RandomTrailers
+        # makes the kernel accept a handshake by minimum length, so the width of
+        # these ranges is the rate at which data packets are misfiled as
+        # handshakes and dropped. Wide ranges cost about a quarter of every data
+        # packet per direction; this ceiling holds the same figure under three in
+        # a million. The entropy lives in where the range sits, asserted below.
         for low, high in bounds:
-            assert high - low > 100_000_000, (low, high)
+            assert validate.H_WIDTH_LO <= high - low + 1 <= validate.H_WIDTH_HI, (low, high)
+
+
+def test_randomize_header_ranges_are_placed_across_the_whole_quarter():
+    """Narrowing the width moved the entropy into the start, so that is what has
+    to be spread. Each range must land somewhere different every draw, across
+    most of its quarter, or a narrow range becomes a constant per install rather
+    than per server."""
+    slot = (validate.H_MAX - validate.H_FLOOR + 1) // 4
+    starts = [int(validate.randomize()["H1"].split("-")[0]) for _ in range(ROUNDS)]
+    assert len(set(starts)) == len(starts)
+    assert max(starts) - min(starts) > slot
+
+
+def test_wide_header_ranges_warn_only_while_random_trailers_is_on():
+    """Either setting alone is fine; together they drop a share of every data
+    packet equal to the share of the header space H1-H3 cover."""
+    wide = {**GOOD_HEADERS, "H1": "5-500000000"}
+    assert not [t for t in validate.warnings_for(wide) if "misfiled" in t]
+
+    on = validate.warnings_for({**wide, "RandomTrailers": "on"})
+    assert [t for t in on if "H1" in t and "misfiled" in t]
+
+    drawn = {**validate.randomize(), "RandomTrailers": "on"}
+    assert not [t for t in validate.warnings_for(drawn) if "misfiled" in t]
 
 
 def test_randomize_does_not_always_hand_h1_the_lowest_range():

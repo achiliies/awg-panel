@@ -63,6 +63,43 @@ H_FLOOR = 5
 H_MIN = 1
 H_MAX = 2_147_483_647
 
+# How wide each drawn header range is, and why it is narrow.
+#
+# RandomTrailers makes a packet's length unbounded, so receive.c stops testing
+# an arriving handshake for an exact length and tests it for a minimum instead:
+# `skb->len >= expected_len` where it used to be `==`. That length test was
+# carrying most of the work of telling a handshake from a data packet. What is
+# left is u32_range_contains against H1, H2 and H3, read at the S1, S2 and S3
+# offsets of a packet whose bytes there are junk, ciphertext or a protected
+# header - uniform over the whole u32 space. A range covering a fraction of that
+# space is therefore that fraction of every data packet misfiled as a handshake,
+# queued to the handshake worker, failed on its MAC and dropped.
+#
+# These were drawn at half a quarter to a whole quarter of the space each, which
+# is 6 to 12 percent apiece: about a quarter of every data packet over roughly
+# 470 bytes lost per direction, in each direction, for as long as the switch was
+# on. Packets under the length floors stay under them and survive, which is what
+# made it look like a throughput problem rather than a broken tunnel. At this
+# width the same figure is under three in a million.
+#
+# What the narrow window costs is per-packet spread: a header value falls in one
+# of a few thousand rather than a few hundred million, so values repeat. Where
+# the range sits is still drawn across its whole quarter - about 29 bits, and
+# that is the part that hides which range belongs to which packet type - and on
+# a server that drew a header protection key the type field is chacha20
+# encrypted on the wire in any case, so the width is not observable there at all.
+#
+# The width is drawn rather than fixed so that it is not itself the constant.
+H_WIDTH_LO = 1_024
+H_WIDTH_HI = 4_096
+
+# Where a hand-typed range stops being safe to leave RandomTrailers on over.
+# Sixteen times the widest the generator draws, so no drawn profile can trip it,
+# and still tight enough that three ranges at the limit cost under five in a
+# hundred thousand packets. warnings_for is the only thing that reads it: a wide
+# range is a legal config and stays saveable, it just cannot be quiet.
+H_WIDTH_WARN = 65_536
+
 # Junk and padding sizes are capped below the smallest sane tunnel MTU: a junk
 # packet that needs fragmenting is a signature of its own.
 JUNK_MAX = 1280
@@ -577,7 +614,7 @@ _SPECS: list[ParamSpec] = [
         must_match_client=True,
         min=H_MIN,
         max=H_MAX,
-        recommended="a random range in one quarter of 5-2147483647, drawn per server",
+        recommended="a narrow random range inside one quarter of 5-2147483647, per server",
     ),
     ParamSpec(
         key="H2",
@@ -596,7 +633,7 @@ _SPECS: list[ParamSpec] = [
         must_match_client=True,
         min=H_MIN,
         max=H_MAX,
-        recommended="a random range in one quarter of 5-2147483647, drawn per server",
+        recommended="a narrow random range inside one quarter of 5-2147483647, per server",
     ),
     ParamSpec(
         key="H3",
@@ -614,7 +651,7 @@ _SPECS: list[ParamSpec] = [
         must_match_client=True,
         min=H_MIN,
         max=H_MAX,
-        recommended="a random range in one quarter of 5-2147483647, drawn per server",
+        recommended="a narrow random range inside one quarter of 5-2147483647, per server",
     ),
     ParamSpec(
         key="H4",
@@ -633,7 +670,7 @@ _SPECS: list[ParamSpec] = [
         must_match_client=True,
         min=H_MIN,
         max=H_MAX,
-        recommended="a random range in one quarter of 5-2147483647, drawn per server",
+        recommended="a narrow random range inside one quarter of 5-2147483647, per server",
     ),
     ParamSpec(
         key="I1",
@@ -1414,6 +1451,36 @@ def warnings_for(values: dict[str, str]) -> list[str]:
             "with four ranges that cannot collide."
         )
 
+    # The one pairing on this page where each setting is fine alone and the two
+    # together lose packets. RandomTrailers makes a handshake's length
+    # unbounded, so the kernel tests an arriving one for a minimum length rather
+    # than an exact one, and H1-H3 are then all that separates a handshake from
+    # a data packet - a range covering a fraction of the u32 space costs that
+    # fraction of every data packet, silently, in both directions at once. The
+    # generator draws these narrow for exactly this reason; a hand-typed wide one
+    # is the case that reaches here, and the numbers are in the message because
+    # nothing else on the page connects the two fields.
+    if _is_set(PARAMS["RandomTrailers"], _get(values, "RandomTrailers")):
+        wide: list[str] = []
+        loss = 0.0
+        for key in ("H1", "H2", "H3"):
+            bounds = _parse_range(_get(values, key))
+            if bounds is None:
+                continue
+            width = bounds[1] - bounds[0] + 1
+            loss += width / 2**32
+            if width > H_WIDTH_WARN:
+                wide.append(f"{key} ({width:,} values)")
+        if wide:
+            out.append(
+                f"{', '.join(wide)} spans far more of the header space than RandomTrailers "
+                "leaves room for. With trailers on, the kernel accepts a handshake by minimum "
+                "length instead of exact length, so H1-H3 are the only thing telling a "
+                f"handshake from a data packet: about {loss:.1%} of data packets are misfiled "
+                "as handshakes and dropped, in each direction, with nothing in any log. Narrow "
+                "these ranges or clear RandomTrailers - either one alone is safe."
+            )
+
     jc = _set_int(values, "Jc")
     if jc and jc > 12:
         out.append(
@@ -1734,14 +1801,18 @@ def _header_ranges(rng: random.Random) -> dict[str, str]:
     are then shuffled before being assigned, so knowing how they are generated
     still does not say which quarter carries handshakes and which carries data.
 
-    Each range stays at least half a quarter wide, around 268 million values, so
-    a repeated header value remains something that does not happen.
+    Each range is narrow - a few thousand values - and has to stay narrow for as
+    long as the advanced group draws RandomTrailers, because with that switch on
+    the width of these ranges is the rate at which the kernel misfiles data
+    packets as handshakes. See H_WIDTH_LO; the two settings cannot be reasoned
+    about apart. Header values do repeat at this width. Where the range sits is
+    what carries the entropy, and it is still drawn across the whole quarter.
     """
     slot = (H_MAX - H_FLOOR + 1) // 4
     bounds: list[tuple[int, int]] = []
     for index in range(4):
         base = H_FLOOR + index * slot
-        width = rng.randint(slot // 2, slot)
+        width = rng.randint(H_WIDTH_LO, H_WIDTH_HI)
         start = base + rng.randint(0, slot - width)
         bounds.append((start, start + width - 1))
     rng.shuffle(bounds)

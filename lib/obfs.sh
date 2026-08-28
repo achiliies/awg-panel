@@ -81,6 +81,38 @@
 OBFS_H_FLOOR=5
 OBFS_H_MAX=2147483647
 
+# How wide each of the four ranges is drawn, and why it is narrow.
+#
+# RandomTrailers makes a packet's length unbounded, so receive.c stops testing
+# an arriving handshake for an exact length and tests it for a minimum instead:
+# `skb->len >= expected_len` where it used to be `==`. That length test was
+# carrying most of the work of telling a handshake from a data packet. What is
+# left is u32_range_contains against H1, H2 and H3, read at the S1, S2 and S3
+# offsets of a packet whose bytes there are junk, ciphertext or a protected
+# header - uniform over the whole u32 space. So a range covering a fraction of
+# that space is that fraction of every data packet misfiled as a handshake,
+# queued to the handshake worker, failed on its MAC and dropped.
+#
+# These were drawn at half a quarter to a whole quarter of the space each, which
+# is 6 to 12 percent apiece: a quarter of all data packets above roughly 470
+# bytes lost per direction, in each direction, from the moment the switch went
+# on. Small packets stay under the length floors and survive, which is what made
+# it read as a throughput problem rather than a broken tunnel. At this width the
+# same figure is under three in a million.
+#
+# What the narrow window costs is per-packet spread: a header value now falls in
+# one of a few thousand rather than a few hundred million, so values repeat.
+# Where the range sits is still drawn across its whole quarter - around 29 bits,
+# and that is the part that hides which range belongs to which packet type - and
+# on any server that drew a header protection key the type field is chacha20
+# encrypted on the wire anyway, so the width is not observable there at all.
+#
+# The width is drawn rather than fixed so that it is not itself the constant,
+# and the ceiling is what keeps the switch above safe to leave on. Raising it
+# and leaving RandomTrailers set is the whole bug again.
+OBFS_H_WIDTH_LO=1024
+OBFS_H_WIDTH_HI=4096
+
 # An ordinary 1500-byte path leaves 1440 bytes for the tunnel, and S4 comes
 # out of that because it rides on every data packet rather than on handshakes.
 OBFS_MTU_BUDGET=1440
@@ -251,12 +283,17 @@ gen_sizes() {
 # lands in equal to the packet type - which is the whole thing H1-H4 exist to
 # hide. So each range is a random sub-interval of its quarter, and the four are
 # shuffled before being assigned. Sets H1-H4.
+#
+# The sub-interval is narrow, and has to stay narrow for as long as
+# gen_advanced draws RandomTrailers: with the switch on, the width of these
+# ranges is the rate at which the kernel misfiles data packets as handshakes.
+# See OBFS_H_WIDTH_LO above - it is the whole of the reason the two are coupled.
 gen_header_ranges() {
     local slot base width start i out=() tmp j
     slot=$(( (OBFS_H_MAX - OBFS_H_FLOOR + 1) / 4 ))
     for (( i = 0; i < 4; i++ )); do
         base=$(( OBFS_H_FLOOR + i * slot ))
-        width=$(rand_int $(( slot / 2 )) "$slot")
+        width=$(rand_int "$OBFS_H_WIDTH_LO" "$OBFS_H_WIDTH_HI")
         start=$(( base + $(rand_int 0 $(( slot - width )) ) ))
         out+=( "${start}-$(( start + width - 1 ))" )
     done
@@ -535,6 +572,13 @@ gen_advanced() {
     # trailer of random length to each packet it sends, sized against what the
     # path has already carried, so it never pushes one over the MTU and there is
     # no budget to charge it against.
+    #
+    # It is safe to leave on only because gen_header_ranges draws H1-H4 narrow.
+    # With the switch on, receive.c tests an arriving handshake for a minimum
+    # length rather than an exact one, and the header ranges are then the only
+    # thing separating a handshake from a data packet; a range covering a
+    # fraction of the u32 space costs that fraction of every data packet. The
+    # two settings cannot be reasoned about apart - see OBFS_H_WIDTH_LO.
     #
     # "on" rather than a drawn value, because parse_bool is all the tools read
     # here. The other state is the empty string and not the word "off": empty is

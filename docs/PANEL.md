@@ -719,7 +719,7 @@ that argues with the page it fills in is a generator nobody trusts.
 | `Jmax` | junk | `Jmin` + 40–240 bytes |
 | `S1`, `S2`, `S3` | sizes | 24–320 bytes each, redrawn if `S1 + 56 = S2` |
 | `S4` | sizes | 12–40 bytes, never more than `1440 − MTU` |
-| `H1`–`H4` | headers | a random range inside one quarter of 5–2147483647, then shuffled between the four |
+| `H1`–`H4` | headers | a narrow random range placed anywhere inside one quarter of 5–2147483647, then shuffled between the four |
 | `I1`–`I5` | imitation | three to five packets of one protocol: a WebRTC call, a QUIC connection or a run of DNS lookups |
 | `HeaderProtectionKey` | advanced | 32 bytes from `/dev/urandom`, and only when `S1`–`S4` can carry its 12-byte nonce |
 | `ContentPaddingAddition` | advanced | a range: top 32–96 bytes, floor anywhere under a third of it |
@@ -897,6 +897,18 @@ appends a trailer of random length to each packet, sized against what the path
 has already carried, so it can never push one over the MTU and there is no
 budget to charge it against.
 
+It is safe to leave on only because `H1`–`H4` are drawn narrow. A trailer makes
+a handshake's length unbounded, so the kernel stops testing an arriving one for
+an exact length and tests it for a minimum instead — and `H1`–`H3` are then the
+only thing separating a handshake from a data packet. The share of the header
+space those ranges cover becomes the share of data packets misfiled as
+handshakes and dropped, in each direction, with nothing in any log. The two
+settings cannot be reasoned about apart: turning trailers on over hand-typed
+quarter-wide ranges loses about a quarter of every data packet over roughly 470
+bytes each way, and reads as collapsed throughput on a tunnel whose ping is
+fine, because small packets stay under the length floors and survive. The save
+warns if the ranges on a server are wide enough for it to matter.
+
 **What the switch costs, and it is not nothing.** Trailers arrived in 3.1 where
 the rest of the group arrived in 3.0, and a peer without them measures an
 arriving handshake, finds it longer than expected and drops it with no error at
@@ -977,11 +989,22 @@ cost anything measurable.
   the only way they cannot contradict each other is for no profile to go below
   the floor at all. Twelve bytes on a data packet is what that costs, out of a
   headroom that is never less than twenty.
-- **Header ranges at least a quarter-space wide.** Around 268 million values
-  each, so a repeated header value stays something that does not happen. The
-  quarters guarantee the four ranges cannot overlap; the shuffle is what stops
-  the quarter a value lands in from revealing the packet type, which is the one
-  thing `H1`–`H4` exist to hide.
+- **Header ranges a few thousand values wide, placed anywhere in their
+  quarter.** The quarters guarantee the four ranges cannot overlap; the shuffle
+  is what stops the quarter a value lands in from revealing the packet type,
+  which is the one thing `H1`–`H4` exist to hide; and *where* each range sits is
+  drawn across its whole quarter, about 29 bits, which is where the entropy
+  lives. The width is deliberately small, and is coupled to `RandomTrailers`:
+  with trailers on the kernel accepts a handshake by minimum length rather than
+  exact length, so `H1`–`H3` become the only thing separating a handshake from a
+  data packet, and the share of the header space a range covers is the share of
+  data packets misfiled as handshakes and dropped — in both directions, with
+  nothing in any log. These were quarter-wide until that switch was drawn on,
+  which cost about a quarter of every data packet over roughly 470 bytes per
+  direction. Header values do repeat at this width; that is the trade, and on
+  any server that drew a `HeaderProtectionKey` the type field is encrypted on
+  the wire anyway, so the width is not observable there at all. Widening these
+  by hand while `RandomTrailers` is set is the same bug, and the save warns.
 - **Decoys of one protocol, three to five of them.** A decoy only works on a
   filter that parses it, and no real host speaks DNS, NTP, STUN and QUIC down a
   single UDP socket pair — a set that does is *more* distinctive than sending

@@ -170,6 +170,28 @@ def check(number: int, values: dict[str, str]) -> None:
     if trailers != "on":
         fail(number, f"RandomTrailers={trailers!r}, expected 'on'")
 
+    # The other half of that switch, and the reason it is safe to leave on. With
+    # trailers the kernel accepts a handshake by minimum length rather than exact
+    # length, so H1-H3 are all that separates a handshake from a data packet: the
+    # share of the header space a range covers is the share of data packets
+    # misfiled as handshakes and dropped, in both directions, with nothing in any
+    # log. warnings_for above catches a width that has gone far enough to be
+    # worth telling an operator about; this catches the drift long before that,
+    # and catches it whether or not the switch above is still being drawn - the
+    # two are one setting and only fail together.
+    for name in ("H1", "H2", "H3", "H4"):
+        bounds = validate._parse_range(values.get(name, ""))
+        if bounds is None:
+            fail(number, f"{name}={values.get(name)!r} is not a range")
+            continue
+        width = bounds[1] - bounds[0] + 1
+        if not validate.H_WIDTH_LO <= width <= validate.H_WIDTH_HI:
+            fail(
+                number,
+                f"{name} is {width} wide, outside "
+                f"{validate.H_WIDTH_LO}-{validate.H_WIDTH_HI}",
+            )
+
     if drawn:
         check_advanced_bands(number, values)
 
