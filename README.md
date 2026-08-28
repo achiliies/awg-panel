@@ -123,8 +123,8 @@ Open the panel, click a client, scan the QR code — or download the `.conf` and
 <td align="center" valign="top">
 <b>WG Tunnel</b><br><sub>full-featured · recommended</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=com.zaneschepke.wireguardautotunnel"><img src="assets/badges/google-play.svg" alt="Get WG Tunnel on Google Play" height="44"></a><br>
-<a href="https://github.com/wgtunnel/android/releases/tag/5.5.0"><img src="assets/badges/github.svg" alt="Download the WG Tunnel APK from GitHub" height="44"></a><br>
-<sub>APK v5.5.0</sub>
+<a href="https://github.com/wgtunnel/android/releases/tag/5.6.0"><img src="assets/badges/github.svg" alt="Download the WG Tunnel APK from GitHub" height="44"></a><br>
+<sub>APK v5.6.0</sub>
 <br><br>
 <b>AmneziaWG</b><br><sub>official · minimal</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=org.amnezia.awg"><img src="assets/badges/google-play.svg" alt="Get AmneziaWG on Google Play" height="44"></a><br>
@@ -151,6 +151,12 @@ Open the panel, click a client, scan the QR code — or download the `.conf` and
 and the lightest way to get on the tunnel. **WG Tunnel** speaks AmneziaWG too and adds the power features:
 per-app split tunneling, auto-tunnel on untrusted Wi-Fi, kill switch, always-on VPN, multiple tunnels
 with per-network rules.
+
+**Take the versions pinned above.** A server installed by this release draws random packet trailers on,
+and that is an AmneziaWG 3.1 setting: a client below 3.1 drops the handshake and neither end reports an
+error. WG Tunnel gained 3.1 in **5.6.0** and the Amnezia VPN client in **5.0.1.5**, so an older build of
+either will not connect until you update it — or until you clear `RandomTrailers` on the Obfuscation
+page. The AmneziaWG apps linked above are 3.1 releases already.
 
 **On Linux (CLI)**: Install `amneziawg-tools` and the kernel module — Ubuntu users can take both from the
 [Amnezia PPA](https://launchpad.net/~amnezia/+archive/ubuntu/ppa) (`sudo add-apt-repository ppa:amnezia/ppa`),

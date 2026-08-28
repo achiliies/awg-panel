@@ -921,10 +921,11 @@ What was left either way was the newest setting on the page waiting for an
 operator to know the fleet was there and go and find the switch — which is the
 argument that used to leave this whole group empty, and it is answered the same
 way. It is still a call about your own fleet: the module and tools `install.sh`
-builds are 3.1, and so are the official AmneziaWG apps under
-[Connect Your Devices](../README.md#connect-your-devices). The third-party and
-bundled clients listed there do not all state which AmneziaWG they carry.
-Clearing the field puts it back.
+builds are 3.1, and so is every build pinned under
+[Connect Your Devices](../README.md#connect-your-devices) — WG Tunnel gained 3.1
+in 5.6.0 and the Amnezia VPN client in 5.0.1.5, which is why those pins are
+versions and not bare links. The App Store has no version to pin, so an iOS
+client is the one you check by hand. Clearing the field puts it back.
 
 It is also the one setting on the page with nothing to copy — there is no value
 to agree on, only on or off — and it does nothing to data packets while

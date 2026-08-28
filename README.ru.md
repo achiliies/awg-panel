@@ -101,8 +101,8 @@ AmneziaWG — это двигатель. **AWG Panel — это все вокр�
 <td align="center" valign="top">
 <b>WG Tunnel</b><br><sub>многофункциональный · рекомендуемый</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=com.zaneschepke.wireguardautotunnel"><img src="assets/badges/google-play.svg" alt="Скачать WG Tunnel в Google Play" height="44"></a><br>
-<a href="https://github.com/wgtunnel/android/releases/tag/5.5.0"><img src="assets/badges/github.svg" alt="Скачать APK-файл WG Tunnel с GitHub" height="44"></a><br>
-<sub>APK v5.5.0</sub>
+<a href="https://github.com/wgtunnel/android/releases/tag/5.6.0"><img src="assets/badges/github.svg" alt="Скачать APK-файл WG Tunnel с GitHub" height="44"></a><br>
+<sub>APK v5.6.0</sub>
 <br><br>
 <b>AmneziaWG</b><br><sub>официальный · минималистичный</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=org.amnezia.awg"><img src="assets/badges/google-play.svg" alt="Скачать AmneziaWG в Google Play" height="44"></a><br>
@@ -126,6 +126,8 @@ AmneziaWG — это двигатель. **AWG Panel — это все вокр�
 </table>
 
 **Какое приложение выбрать для Android?** Официальное приложение **AmneziaWG** намеренно сделано минималистичным — импортировал, подключился, готово — и это самый легковесный способ подключиться к туннелю. **WG Tunnel** также поддерживает AmneziaWG и добавляет расширенные возможности: раздельное туннелирование для отдельных приложений (split tunneling), автоподключение в ненадежных сетях Wi-Fi, Kill Switch, режим Always-On VPN и работу с несколькими туннелями с правилами для разных сетей.
+
+**Ставьте версии, указанные выше.** Сервер, установленный этим релизом, включает случайные хвосты пакетов, а это настройка AmneziaWG 3.1: клиент ниже 3.1 отбрасывает рукопожатие, и ошибки не появляется ни на одной стороне. В WG Tunnel поддержка 3.1 появилась в **5.6.0**, в клиенте Amnezia VPN — в **5.0.1.5**, поэтому сборка постарее не подключится, пока вы её не обновите — либо пока не очистите `RandomTrailers` на странице обфускации. Приложения AmneziaWG по ссылкам выше уже собраны на 3.1.
 
 **В Linux (консоль / CLI)**: установите `amneziawg-tools` и модуль ядра — пользователи Ubuntu могут установить и то, и другое из [Amnezia PPA](https://launchpad.net/~amnezia/+archive/ubuntu/ppa) (`sudo add-apt-repository ppa:amnezia/ppa`), на остальных дистрибутивах потребуется сборка из репозитория выше — затем поднимите туннель командой `sudo awg-quick up ./client.conf`.
 
