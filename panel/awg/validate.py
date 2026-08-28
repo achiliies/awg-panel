@@ -1472,13 +1472,28 @@ def warnings_for(values: dict[str, str]) -> list[str]:
             if width > H_WIDTH_WARN:
                 wide.append(f"{key} ({width:,} values)")
         if wide:
+            # A percentage is the wrong unit for most of the band this warns
+            # over. H_WIDTH_WARN is set far below where the loss becomes
+            # visible, on purpose, so three ranges at the threshold come to
+            # under five in a hundred thousand - and "0.0%" is what a
+            # percentage makes of that, all the way up to about twenty million
+            # values. A warning about silent packet loss that reports zero
+            # loss is worse than no warning, so under a percent it is phrased
+            # as a count, which stays a number the whole way down. loss cannot
+            # be zero here: a range wide enough to reach this branch is one
+            # that has already been added to it.
+            rate = (
+                f"{loss:.1%} of data packets"
+                if loss >= 0.01
+                else f"1 in {round(1 / loss):,} data packets"
+            )
             out.append(
                 f"{', '.join(wide)} spans far more of the header space than RandomTrailers "
                 "leaves room for. With trailers on, the kernel accepts a handshake by minimum "
                 "length instead of exact length, so H1-H3 are the only thing telling a "
-                f"handshake from a data packet: about {loss:.1%} of data packets are misfiled "
-                "as handshakes and dropped, in each direction, with nothing in any log. Narrow "
-                "these ranges or clear RandomTrailers - either one alone is safe."
+                f"handshake from a data packet: about {rate} are misfiled as handshakes and "
+                "dropped, in each direction, with nothing in any log. Narrow these ranges or "
+                "clear RandomTrailers - either one alone is safe."
             )
 
     jc = _set_int(values, "Jc")

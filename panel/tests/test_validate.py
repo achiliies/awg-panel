@@ -546,11 +546,19 @@ def test_randomize_header_ranges_are_placed_across_the_whole_quarter():
     """Narrowing the width moved the entropy into the start, so that is what has
     to be spread. Each range must land somewhere different every draw, across
     most of its quarter, or a narrow range becomes a constant per install rather
-    than per server."""
+    than per server.
+
+    On the offset inside the quarter rather than on the start, because the two
+    are not the same assertion. The shuffle hands H1 a random quarter, and the
+    four quarters are a slot apart, so raw starts are spread that far by the
+    shuffle alone - they clear any span worth asserting while the placement
+    inside the quarter is a constant. Taking the start modulo the slot removes
+    the quarter and leaves only the draw this is here to watch.
+    """
     slot = (validate.H_MAX - validate.H_FLOOR + 1) // 4
     starts = [int(validate.randomize()["H1"].split("-")[0]) for _ in range(ROUNDS)]
-    assert len(set(starts)) == len(starts)
-    assert max(starts) - min(starts) > slot
+    offsets = [(start - validate.H_FLOOR) % slot for start in starts]
+    assert max(offsets) - min(offsets) > slot // 2, offsets
 
 
 def test_wide_header_ranges_warn_only_while_random_trailers_is_on():
@@ -564,6 +572,25 @@ def test_wide_header_ranges_warn_only_while_random_trailers_is_on():
 
     drawn = {**validate.randomize(), "RandomTrailers": "on"}
     assert not [t for t in validate.warnings_for(drawn) if "misfiled" in t]
+
+
+def test_the_wide_header_warning_reports_a_rate_a_reader_can_act_on():
+    """The threshold sits far below where the loss shows up as a percentage, so
+    a percentage would read "about 0.0%" over most of the band this warns on -
+    and a warning about silent packet loss that reports zero loss is worse than
+    no warning at all."""
+    at_threshold = {
+        **validate.randomize(),
+        "RandomTrailers": "on",
+        "H1": f"5-{validate.H_WIDTH_WARN + 5}",
+    }
+    text = next(t for t in validate.warnings_for(at_threshold) if "misfiled" in t)
+    assert "0.0%" not in text, text
+    assert "1 in " in text, text
+
+    heavy = {**at_threshold, "H1": "5-500000005"}
+    text = next(t for t in validate.warnings_for(heavy) if "misfiled" in t)
+    assert "11.6% of data packets" in text, text
 
 
 def test_randomize_does_not_always_hand_h1_the_lowest_range():

@@ -489,6 +489,11 @@ echo "$(t "  ${MEM_AVAIL} MB memory free${SWAPNOTE}, ${DISK} MB disk, building w
 # the config would break every issued client (they pin the server key).
 EXISTING=0
 ENDPOINT_MOVED=0
+# Set by trailer_footgun_notice, printed by the banner at the very end. It is
+# carried that far rather than said once at the step because the step it
+# belongs to is followed by a kernel build, and a line above one of those has
+# scrolled off any terminal by the time the install finishes.
+TRAILERNOTE=""
 if [[ -f "$CONF_DIR/${IFACE}.conf" && $FRESH -eq 0 ]]; then
     EXISTING=1
     IGNORED=()
@@ -1714,6 +1719,58 @@ ipv6_migrate_conf() {
     return 0
 }
 
+# The one thing an upgrade finds wrong with an existing obfuscation profile and
+# does not put right. v1.1.1 drew RandomTrailers on over quarter-wide header
+# ranges, and the two together cost about a quarter of every data packet over
+# roughly 470 bytes, per direction, in silence - lib/obfs.sh has the mechanism
+# beside OBFS_H_WIDTH_LO, and the panel reports the same finding on the same
+# numbers when the config is opened there.
+#
+# Said rather than repaired, and the difference from ipv6_migrate_conf above is
+# the whole of the reason. That one rewrites the server's own address, and a
+# client that has not heard about it keeps working with less than it could
+# reach. This one cannot be repaired on the server alone: H1-H4 and the switch
+# have to match at both ends, so any fix here is a fix every client has to
+# import again, and an unattended awg-update that took the fleet off the air
+# would be a worse outcome than the bug - which at least leaves the tunnel up.
+# So the installer names it, the panel says it again beside the button that
+# does the redraw, and choosing the moment stays with the operator.
+trailer_footgun_notice() {
+    [[ -f "$SERVER_CONF" ]] || return 0
+    obfs_trailer_footgun "$(iface_get RandomTrailers)" \
+        "$(iface_get H1)" "$(iface_get H2)" "$(iface_get H3)" || return 0
+
+    echo "$(t "  ${Y}!!${N} RandomTrailers over wide header ranges (${OBFS_TRAILER_WIDE}) - see the note at the end" \
+              "  ${Y}!!${N} RandomTrailers поверх широких диапазонов (${OBFS_TRAILER_WIDE}) — см. примечание в конце")"
+
+    # Wrapped so that the two substitutions land at the start of a line: both
+    # are longer in Russian than in English and one of them is longer still
+    # when the loss is small enough to be counted rather than shared, and a
+    # note about a subtle problem that arrives with a ragged right edge is one
+    # fewer reason to read it.
+    TRAILERNOTE=$'\n'"$(t "${Y}The obfuscation profile on this server is losing packets.${N} RandomTrailers is set over
+header ranges far wider than it leaves room for (${OBFS_TRAILER_WIDE}), and the kernel takes
+${OBFS_TRAILER_LOSS} for handshakes and drops them - in each direction, with
+nothing in any log. Small packets stay under the length floors and are delivered, so
+ping and keepalives look perfect while throughput collapses.
+
+This upgrade did not change it. The ranges and the switch have to match at both ends,
+so redrawing them is a config every client has to import again - an operator's call,
+not an upgrade's.
+  ${B}the panel${N} -> Obfuscation -> Reconfigure     when you are ready to reissue clients" \
+             "${Y}Профиль обфускации на этом сервере теряет пакеты.${N} Случайные хвосты пакетов
+включены поверх диапазонов заголовков намного шире, чем это допускает (${OBFS_TRAILER_WIDE}).
+Ядро принимает ${OBFS_TRAILER_LOSS} за рукопожатия и
+отбрасывает — в каждую сторону и без единой записи в журналах. Мелкие пакеты проходят
+под порогами длины и доставляются, поэтому ping и keepalive выглядят идеально,
+а скорость падает.
+
+Обновление этого не изменило. Диапазоны и переключатель должны совпадать на обоих
+концах, поэтому их перерисовка — это новый конфиг для каждого клиента: решение
+оператора, а не обновления.
+  ${B}панель${N} -> Обфускация -> Перенастроить     когда будете готовы раздать конфиги заново")"
+}
+
 # What a client config should carry, given the mode. Both are defaults for new
 # clients; awg-client and the panel can still be told otherwise per client.
 #
@@ -1801,6 +1858,10 @@ if (( EXISTING )); then
     # sending that traffic outside the tunnel. Leaving that alone to preserve
     # the letter of "an upgrade changes nothing" would be preserving a leak.
     ipv6_migrate_conf
+    # After the migration rather than before it, so the two read in the order
+    # they happened: what this upgrade changed, then the one thing it found and
+    # left alone.
+    trailer_footgun_notice
 else
 
 step "$(t "Generating the obfuscation profile" "Генерация профиля маскировки (обфускации)")"
@@ -2735,5 +2796,5 @@ ${PANEL_LINE}
 ${Y}$(t "FIREWALL:" "ФАЕРВОЛ:")${N} ${FWNOTE}
 
 ${TLSNOTE}
-
+${TRAILERNOTE}
 EOF

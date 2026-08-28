@@ -194,6 +194,32 @@ That is a property of the installer, not a promise made here: it regenerates
 none of those, because regenerating the server key alone would break every
 config ever issued.
 
+### The one thing an upgrade will not put right
+
+Keeping the obfuscation profile is what makes the paragraph above true, and on a
+server installed from **v1.1.1** it is also what leaves a real fault in place.
+That release drew `RandomTrailers` on beside header ranges a whole quarter of
+the header space wide, and the two together cost about a quarter of every data
+packet over roughly 470 bytes — in each direction, with nothing in any log.
+Packets under that stay below the kernel's length floors and are delivered, so
+ping and keepalives look perfect while throughput collapses.
+[The advanced group](PANEL.md#the-advanced-group) has the mechanism.
+
+An upgrade **finds this and says so** — on the step that keeps the
+configuration, and again in the banner at the end, which is where it will still
+be after a kernel build has scrolled past. It does not repair it, and that is
+the deliberate part: `H1`–`H4` and the switch have to match at both ends, so
+redrawing them is a config every client has to import again, and an unattended
+`awg-update` that took the fleet off the air would be a worse outcome than the
+bug — which at least leaves the tunnel up.
+
+So the repair stays an operator's, at a moment they pick: **Obfuscation →
+Reconfigure** in the panel, then hand out the new client configs. Clearing
+`RandomTrailers` on that page is the same repair at the same reissue cost, and
+keeps the wider ranges. Servers installed from any release after v1.1.1 draw the
+ranges narrow and are not affected; the panel reports the pairing on any profile
+that has it, however it got there.
+
 On top of it, **a full backup is taken before anything is replaced**. It goes to
 `/var/lib/awg-panel/backups/awg-backup-<date>-<time>.tar.gz`, it is the same
 archive **Settings → Backup** produces, and it is written through the panel's own

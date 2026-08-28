@@ -113,6 +113,91 @@ OBFS_H_MAX=2147483647
 OBFS_H_WIDTH_LO=1024
 OBFS_H_WIDTH_HI=4096
 
+# The ceiling a profile that already exists is measured against, as opposed to
+# the band above, which is what a fresh draw is held to. Sixteen times the
+# widest this file draws, so nothing it produced can trip it, and the mirror of
+# H_WIDTH_WARN in panel/awg/validate.py: the panel reports the same finding on
+# the same numbers when the same config is opened there, and a server should
+# not hear two different answers depending on which one it asked.
+OBFS_H_WIDTH_WARN=65536
+
+# The width of one header range as a config spells it: "start-end", or a bare
+# number, which is a range of one. Everything else is 0 - an unwritten H is not
+# a wide one, and neither is a reversed pair somebody typed by hand.
+obfs_h_width() {
+    local v=$1
+    if [[ $v =~ ^([0-9]+)-([0-9]+)$ ]] && (( BASH_REMATCH[2] >= BASH_REMATCH[1] )); then
+        printf '%s' $(( BASH_REMATCH[2] - BASH_REMATCH[1] + 1 ))
+    elif [[ $v =~ ^[0-9]+$ ]]; then
+        printf 1
+    else
+        printf 0
+    fi
+}
+
+# The share of data packets a total header width costs, phrased the way
+# warnings_for phrases the same finding in the panel: a percentage once it is
+# one, and a count below that. A percentage of the bottom of this band rounds
+# to "0.0%", and a warning about silent packet loss that reports no loss is
+# worse than no warning at all.
+#
+# The whole phrase, "about" included, rather than a bare figure the caller
+# wraps. The two halves do not take the same sentence in either language - one
+# is a share and the other is an ordinal - and a caller assembling them would
+# have to know which it got back.
+obfs_loss_phrase() {
+    local total=$1 tenths whole frac
+    (( total > 0 )) || { printf '%s' "$(t "nothing" "ничего")"; return; }
+    tenths=$(( total * 1000 / 4294967296 ))
+    if (( tenths >= 10 )); then
+        whole=$(( tenths / 10 ))
+        frac=$(( tenths % 10 ))
+        printf '%s' "$(t "about ${whole}.${frac}% of data packets" \
+                         "около ${whole}.${frac}% пакетов данных")"
+    else
+        printf '%s' "$(t "about 1 in $(( 4294967296 / total )) data packets" \
+                         "примерно 1 из $(( 4294967296 / total )) пакетов данных")"
+    fi
+}
+
+# The pairing that costs packets, read off a profile as written rather than as
+# drawn: RandomTrailers set, over header ranges wider than anything this file
+# would draw. Takes the four values as they appear in the config, because the
+# caller owns reading them and the places they are read from differ.
+#
+# Returns 0 when the pairing is present, and then OBFS_TRAILER_WIDE names the
+# ranges that are too wide and OBFS_TRAILER_LOSS says what they cost. H4 is not
+# among them: receive.c tests the transport range last and by minimum length
+# either way, so a wide H4 misfiles nothing - it is H1, H2 and H3 that are
+# tested first and that a data packet can fall into.
+#
+# Usage: obfs_trailer_footgun "$RandomTrailers" "$H1" "$H2" "$H3"
+obfs_trailer_footgun() {
+    local rt=$1 total=0 width n=0
+    OBFS_TRAILER_WIDE=""
+    OBFS_TRAILER_LOSS=""
+
+    # parse_bool's answer, which is all the tools read here. Anything else on
+    # the line, the empty string and a missing line included, is a switch that
+    # is off, and an off switch leaves any width safe.
+    case ${rt,,} in
+        on|true|yes|1) ;;
+        *) return 1 ;;
+    esac
+
+    shift
+    for width in "$@"; do
+        n=$(( n + 1 ))
+        width=$(obfs_h_width "$width")
+        (( total += width ))
+        (( width > OBFS_H_WIDTH_WARN )) &&
+            OBFS_TRAILER_WIDE+="${OBFS_TRAILER_WIDE:+, }H${n}"
+    done
+
+    [[ -n "$OBFS_TRAILER_WIDE" ]] || return 1
+    OBFS_TRAILER_LOSS=$(obfs_loss_phrase "$total")
+}
+
 # An ordinary 1500-byte path leaves 1440 bytes for the tunnel, and S4 comes
 # out of that because it rides on every data packet rather than on handshakes.
 OBFS_MTU_BUDGET=1440
