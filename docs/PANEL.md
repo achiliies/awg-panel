@@ -580,10 +580,14 @@ challenge instead, and only a peer really at the address it claims receives the
 reply and can send it back. A genuine client passes that and connects; a flood
 from spoofed addresses never sees the challenge and gets no further.
 
-Switching it on takes that answer away. Under load the handshakes are dropped
-where the challenge would have gone out, so a real client gets silence — no
-error at either end — and no way back in until the flood stops. **Off is the
-right default**, and the panel says so on the save when you turn it on.
+Switching it on takes the whole mechanism away, not only the reply. The server
+stops counting itself as under load at all, so it never asks a peer for a cookie
+and never sends one, and every handshake that arrives is verified in full — the
+forged ones included. Genuine clients keep connecting straight through a flood;
+what the flood costs is the server's CPU, for as long as it lasts. **Off is
+still the right default** — on a machine with nothing in front of it the cookie
+is the cheaper side of that trade — and the panel says so on the save when you
+turn it on.
 
 Two things it is not:
 

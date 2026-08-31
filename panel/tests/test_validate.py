@@ -1160,10 +1160,15 @@ def test_disable_cookies_rejects_what_the_tools_cannot_read(value):
 def test_disable_cookies_warns_about_what_it_costs_when_on():
     """Nothing about a flood is visible from a settings page, so the save is where
     an admin first hears the protection is going away - and server/status keeps
-    saying it for as long as the switch is on, which test_api_server holds."""
+    saying it for as long as the switch is on, which test_api_server holds.
+
+    What it costs is the CPU spent verifying a flood nobody asked for a cookie,
+    not the clients that used to be dropped with it: the module stopped counting
+    itself under load at all in 3.1.20260828, and the wording followed."""
     matching = [t for t in validate.warnings_for({"DisableCookies": "on"}) if "DisableCookies" in t]
     assert matching, "enabling it must say what it costs"
-    assert "cookie challenge" in matching[0]
+    assert "cookie" in matching[0] and "flood" in matching[0]
+    assert "CPU" in matching[0], "the cost is the work, and the warning has to name it"
     assert not [
         t for t in validate.warnings_for({"DisableCookies": "off"}) if "DisableCookies" in t
     ]

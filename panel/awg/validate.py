@@ -796,9 +796,13 @@ _SPECS: list[ParamSpec] = [
             "Set a constant and that rounding is gone: the packet on the wire becomes the "
             "packet inside it plus a fixed number, which tracks the original byte for byte. "
             "Anything below 16 is therefore worse than leaving this empty, and Reconfigure "
-            "will not draw one. It is an AmneziaWG 3.0 addition: a peer still on 2.x, or one "
-            "that imported a .conf through the Amnezia app, simply never pads - the tunnel "
-            "still works, but only the end that has this set is hiding anything."
+            "will not draw one. What is drawn is then bounded by what the path has already "
+            "carried, the same measure the random trailer uses: the padding fills a packet "
+            "out towards the largest this peer has sent or received and never past it, so a "
+            "full-length packet takes none and the range does its work on the short ones. "
+            "It is an AmneziaWG 3.0 addition: a peer still on 2.x, or one that imported a "
+            ".conf through the Amnezia app, simply never pads - the tunnel still works, but "
+            "only the end that has this set is hiding anything."
         ),
         must_match_client=True,
         importer_safe=False,
@@ -985,9 +989,9 @@ _SPECS: list[ParamSpec] = [
     ParamSpec(
         key="DisableCookies",
         group="protection",
-        label="Disable cookie replies",
+        label="Disable cookie protection",
         kind="bool",
-        help_short="Stops the server answering a handshake flood with a cookie challenge.",
+        help_short="Stops the server treating a handshake flood as load, so it never asks for a cookie.",
         help_long=(
             "Verifying a handshake costs real work, so forged ones sent from addresses that do "
             "not exist are a cheap way to load a server. The cookie is WireGuard's answer to "
@@ -995,19 +999,23 @@ _SPECS: list[ParamSpec] = [
             "challenge instead, and only a peer really at the address it claims ever receives "
             "the reply and can send it back. A genuine client passes that and connects; a flood "
             "from spoofed addresses never sees the challenge and gets no further. "
-            "Switching this on takes the answer away. Under load the handshakes are dropped "
-            "where the challenge would have gone out, so a real client gets silence with no "
-            "error and no way back in until the flood stops - the cookie was its ticket. "
+            "Switching this on takes the whole mechanism away, not only the reply. The server "
+            "stops counting itself as under load at all, so it never asks a peer for a cookie "
+            "and never sends one, and every handshake that arrives is verified in full - the "
+            "forged ones included. Genuine clients keep connecting straight through a flood; "
+            "what the flood costs is this machine's CPU, for as long as it lasts. That is the "
+            "trade, and on a server with nothing in front of it the cookie is the cheaper side "
+            "of it. "
             "It is the server's own business and no client reads it: nothing is written into "
             "any client config, no peer needs it and nothing has to be re-imported. It also "
             "does not hide anything, and is not a way to stop the server being recognised - a "
             "cookie only ever goes to someone who already has the server's public key and is "
             "flooding it, and H3 and S3 are what shape the reply on the wire. Leave it off "
-            "unless something in front of this server already absorbs floods and the replies "
-            "are the thing you want gone."
+            "unless something in front of this server already absorbs floods and the work of "
+            "answering them is what you want gone."
         ),
         must_match_client=False,
-        recommended="off - the cookie is worth more than it costs",
+        recommended="off - the cookie costs less than verifying a flood",
     ),
     ParamSpec(
         key="ListenPort",
@@ -1388,12 +1396,13 @@ def warnings_for(values: dict[str, str]) -> list[str]:
     # Server page dedupes: the standing notice is the one that keeps it.
     if _is_set(PARAMS["DisableCookies"], _get(values, "DisableCookies")):
         out.append(
-            "DisableCookies is on: this server no longer answers a handshake flood with a "
-            "cookie challenge, which is what lets a genuine client through one while forged "
-            "handshakes from spoofed addresses are turned away. While it is under load those "
-            "handshakes are dropped instead, and real clients are dropped with them, with no "
-            "error at either end. It hides nothing and no client reads it - leave it off "
-            "unless something else in front of this server is absorbing floods."
+            "DisableCookies is on: this server no longer treats a handshake flood as load, so "
+            "it never asks a peer for a cookie and never sends one. Genuine clients keep "
+            "connecting through a flood, and the server verifies every forged handshake in "
+            "full as well - so a flood costs this machine CPU for as long as it runs, where "
+            "the cookie would have turned it away for nothing. It hides nothing and no client "
+            "reads it - leave it off unless something else in front of this server is "
+            "absorbing floods."
         )
 
     hostile: list[str] = []

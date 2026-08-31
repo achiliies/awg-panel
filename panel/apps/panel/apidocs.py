@@ -922,7 +922,7 @@ CATALOG: tuple[Op, ...] = (
             "ifaceUp": True,
             "moduleLoaded": True,
             "toolsVersion": "amneziawg-tools v3.1.20260812 - https://amnezia.org",
-            "moduleVersion": "3.1.20260812",
+            "moduleVersion": "3.1.20260828",
             "features": {
                 "headerRanges": True,
                 "imitationPackets": True,

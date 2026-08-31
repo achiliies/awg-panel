@@ -65,10 +65,11 @@
 # it covers is the handshake, whose length is otherwise the same every time.
 #
 # DisableCookies, 3.1's other addition, is left unset for a different reason:
-# not a client that cannot read it, but a default worth keeping. It suppresses
-# the cookie challenge that answers a handshake flood, and off is what a server
-# wants unless something in front of it is already absorbing one. It is not
-# obfuscation and nothing below draws it either.
+# not a client that cannot read it, but a default worth keeping. It stops the
+# server counting itself as under load, so it never asks for the cookie that
+# answers a handshake flood and verifies every forged one in full instead - and
+# off is what a server wants unless something in front of it is already
+# absorbing that work. It is not obfuscation and nothing below draws it either.
 
 # shellcheck source=lib/i18n.sh
 . "$(dirname "${BASH_SOURCE[0]}")/i18n.sh"

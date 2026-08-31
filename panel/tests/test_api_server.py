@@ -188,7 +188,9 @@ def test_a_server_only_change_restarts_but_asks_nobody_to_reimport(api, server_c
     assert interface_value(server_conf, "DisableCookies") == "on"
     # The switch costs the flood protection, and the save is the only place an
     # admin is in a position to hear that.
-    assert any("cookie challenge" in text for text in body["warnings"]), body["warnings"]
+    assert any("never asks a peer for a cookie" in text for text in body["warnings"]), body[
+        "warnings"
+    ]
     # Nothing the client holds moved, which is what mustReimport just promised.
     assert client_conf(conf_dir, "phone") == before
 
@@ -661,6 +663,11 @@ def test_a_disabled_cookie_reply_keeps_saying_so_on_the_status_page(api):
     rendering both, one paragraph about cookie replies printed out twice. The
     page drops the line from the save's block once the standing one carries it;
     what neither end may do is stop saying it.
+
+    What the paragraph says changed with the module: since 3.1.20260828 the
+    switch stops the server counting itself under load at all, so the cost it
+    names is the work of verifying a flood rather than the clients that used to
+    be dropped alongside it.
     """
     assert not [text for text in _status_warnings(api) if "DisableCookies" in text]
 
@@ -670,7 +677,7 @@ def test_a_disabled_cookie_reply_keeps_saying_so_on_the_status_page(api):
 
     standing = [text for text in _status_warnings(api) if "DisableCookies" in text]
     assert standing, _status_warnings(api)
-    assert "cookie challenge" in standing[0]
+    assert "never asks a peer for a cookie" in standing[0]
     # Word for word the same sentence, which is what lets the page recognise it
     # as one thing said twice rather than two things that happen to overlap.
     assert standing == [text for text in saved.json()["warnings"] if "DisableCookies" in text]

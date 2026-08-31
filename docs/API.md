@@ -852,12 +852,12 @@ handshake, whose length is otherwise the same every time however random the byte
 in it are.
 
 AmneziaWG 3.1's other addition, `DisableCookies`, is deliberately not drawn by
-either generator. It is a server-side switch — it
-suppresses the cookie challenge that answers a handshake flood — so it belongs
-to no obfuscation profile, appears in no client config, and never sets
-`mustReimport`. It is still an `[Interface]` value, so saving it sets
-`needsRestart`, and `PUT api/v1/server` takes it under `params` like any other
-key. Turning it on comes back with a warning saying what it costs.
+either generator. It is a server-side switch — it stops the server counting
+itself as under load, so it never asks for the cookie that answers a handshake
+flood — and so belongs to no obfuscation profile, appears in no client config,
+and never sets `mustReimport`. It is still an `[Interface]` value, so saving it
+sets `needsRestart`, and `PUT api/v1/server` takes it under `params` like any
+other key. Turning it on comes back with a warning saying what it costs.
 
 `ContentPaddingAddition` comes back as a range rather than a number, and that is
 not cosmetic. The kernel uses it *instead of* the padding it does anyway — every
@@ -942,7 +942,7 @@ Idempotent: starting a tunnel that is already up answers `204`.
   "ifaceUp": true,
   "moduleLoaded": true,
   "toolsVersion": "amneziawg-tools v3.1.20260812 - https://amnezia.org",
-  "moduleVersion": "3.1.20260812",
+  "moduleVersion": "3.1.20260828",
   "features": { "headerRanges": true, "imitationPackets": true,
                 "headerProtectionKey": true, "contentPadding": true, "timers": true,
                 "randomTrailers": true, "disableCookies": true },

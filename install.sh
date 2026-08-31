@@ -113,7 +113,14 @@ SHARE_DIR=/usr/local/share/awg-script
 # Pinned upstream releases (the v3.1 line this repo's parameters target),
 # so installs are reproducible and not exposed to whatever lands on
 # master. Override with --kmod-ref / --tools-ref.
-KMOD_REF=v3.1.20260812
+#
+# The two are pinned apart because upstream releases them apart: the module
+# has moved twice since v3.1.20260812 and the tools have not moved at all, so
+# the tools tag below is the newest there is rather than a copy of the one
+# above it. Nothing requires them to match - the module gained no netlink
+# attribute in either commit, which is the only thing the tools would need to
+# have learned about.
+KMOD_REF=v3.1.20260828
 TOOLS_REF=v3.1.20260812
 
 # And the commit each of those tags stood at when this release was tested.
@@ -123,7 +130,7 @@ TOOLS_REF=v3.1.20260812
 # came with the bundle; a mismatch stops the install either way. Cleared when
 # --kmod-ref / --tools-ref name something else, because a commit recorded for
 # one ref proves nothing about another.
-KMOD_SHA=46803204e7ec3b068199cd671143bec661d3fe21
+KMOD_SHA=3c38e168beb7c60dec41dfe423d41555205a3dac
 TOOLS_SHA=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 
 while [[ $# -gt 0 ]]; do
@@ -737,10 +744,58 @@ fi
 # under `set -o pipefail` a version.h that upstream has moved or renamed makes
 # sed exit non-zero, the assignment takes that status, and errexit ends the run
 # on the spot with nothing printed, two lines after announcing a module build.
-MODVER=$(sed -n 's|.*WIREGUARD_VERSION "\(.*\)".*|\1|p' \
+HDRVER=$(sed -n 's|.*WIREGUARD_VERSION "\(.*\)".*|\1|p' \
          amneziawg-linux-kernel-module/src/version.h 2>/dev/null | head -1 || true)
-echo "$(t "  module ${KMOD_REF} (source version ${MODVER:-unknown}), tools ${TOOLS_REF}" \
-          "  модуль ${KMOD_REF} (версия исходников ${MODVER:-unknown}), утилиты ${TOOLS_REF}")"
+
+# What the module will report, which is not always what its own header says.
+# version.h is upstream's answer and was taken on trust here, but a tag can
+# land with that header left at the previous release's number: v3.1.20260828
+# carries "3.1.20260812", the string the tag before it carried, and the two
+# releases are six commits apart.
+#
+# Everything that can notice an upgrade compares those strings and nothing
+# else - kmod_version_line in lib/common.sh, the panel's running-vs-installed
+# notice, and dkms, which keys a registration on the version and would file
+# two different modules under one name. Left at the header's value, an upgrade
+# that could not unload the module in use puts new code on disk, leaves the
+# old code in the kernel, reports the same number from both, and the one
+# warning written to say so never fires. That is the case this matters in,
+# because it is the case where the fix an admin installed is not running.
+#
+# So the tag wins where the two disagree: it is what was pinned, tested and
+# released, and it is already the name the summary below prints. Only a tag
+# that looks like a release, though - --kmod-ref can name a branch, and
+# "master" is neither a version to register a module under nor one a later
+# build could be compared against. Anything else leaves the header to answer,
+# as before, and the line below says which answer was taken.
+MODVER="$HDRVER"
+if [[ "$KMOD_REF" =~ ^v?[0-9]+(\.[0-9]+)+(-[0-9A-Za-z]+)?$ ]]; then
+    MODVER="${KMOD_REF#v}"
+fi
+
+# Written back into the header rather than only passed to make below, and that
+# is the whole of why this works. dkms.conf names no MAKE, so dkms drives
+# Kbuild itself, never sets WIREGUARD_VERSION on the command line and takes
+# whatever the #ifndef holds - so a value passed only to the make below would
+# put one number on the module built here and a different one on the module
+# dkms installs, which is the one that survives a reboot and the one everybody
+# ends up reading. Correcting the source is what leaves every path agreeing:
+# this build, dkms's own, and the PACKAGE_VERSION written from it further down.
+#
+# On the copy, never on the pins. The clone and the vendor/ cp -a both land in
+# this working directory, so nothing under vendor/ is touched and the commit
+# check above has already passed on the sources as upstream published them.
+if [[ -n "$MODVER" && "$MODVER" != "$HDRVER" ]]; then
+    sed -i "s|^#define WIREGUARD_VERSION \".*\"|#define WIREGUARD_VERSION \"${MODVER}\"|" \
+        amneziawg-linux-kernel-module/src/version.h
+fi
+
+echo "$(t "  module ${KMOD_REF} (source version ${HDRVER:-unknown}), tools ${TOOLS_REF}" \
+          "  модуль ${KMOD_REF} (версия исходников ${HDRVER:-unknown}), утилиты ${TOOLS_REF}")"
+if [[ -n "$HDRVER" && "$MODVER" != "$HDRVER" ]]; then
+    echo "$(t "  reported as ${MODVER}, after the tag: upstream left version.h at ${HDRVER}" \
+              "  сообщает о себе как ${MODVER}, по тегу: upstream оставил в version.h ${HDRVER}")"
+fi
 if (( VENDORED )); then
     echo "$(t "  built from the sources in this bundle, at the pinned commits" \
               "  собрано из исходного кода в составе пакета (зафиксированные коммиты)")"
@@ -764,18 +819,19 @@ export MAKEFLAGS="-j${JOBS}"
 # running. src/version.h carries the real one behind an #ifndef, so passing it
 # here is what makes the two agree. It is also what dkms below produces on its
 # own: dkms.conf names no MAKE, so dkms drives Kbuild directly, never sets
-# WIREGUARD_VERSION, and gets the header's value. Without this line the module
-# built here and the module dkms installs would report different versions, and
-# the one everybody looks at would be the second.
+# WIREGUARD_VERSION, and gets the header's value - which the block above has
+# already corrected where the tag and the header disagreed, so the two answers
+# are the same one before either build starts.
 #
 # Passed only when there is one to pass, and guarded the way the dkms block
-# below guards the same string. An unreadable version.h leaves MODVER empty,
-# and `WIREGUARD_VERSION=` on the command line is an override to the empty
-# string rather than no override at all: the module would report no version at
-# all, while dkms - which falls back to upstream's own value - would still
-# register 1.0.0. That is the disagreement the paragraph above exists to
-# prevent, arrived at from the other side. Passing nothing leaves version.h's
-# #ifndef to answer, which is what dkms gets anyway.
+# below guards the same string. MODVER is empty only when version.h could not
+# be read and --kmod-ref named something that is not a release tag, and
+# `WIREGUARD_VERSION=` on the command line is an override to the empty string
+# rather than no override at all: the module would report no version at all,
+# while dkms - which falls back to upstream's own value - would still register
+# 1.0.0. That is the disagreement the paragraph above exists to prevent,
+# arrived at from the other side. Passing nothing leaves version.h's #ifndef
+# to answer, which is what dkms gets anyway.
 MODMAKE=()
 if [[ "$MODVER" =~ ^[A-Za-z0-9._+-]+$ ]]; then
     MODMAKE=(WIREGUARD_VERSION="$MODVER")
