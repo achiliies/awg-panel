@@ -802,10 +802,11 @@ MTU leaves free. That budget is enforced, not advised: `PUT api/v1/server`
 rejects any `MTU + S4` above 1420, reported against both fields so it is
 actionable from either page. It is the one overrun with no symptom at the moment
 it is made — the tunnel comes up, small requests work, and full-size packets are
-fragmented rather than refused, because the outer datagram carries no DF. `ContentPaddingAddition` is deliberately *not* in that sum: it
-goes inside the encrypted payload, and the sender clamps each packet's share of
-it to what that packet leaves below the MTU, so it cannot make a full-size
-packet larger however wide the range is.
+fragmented rather than refused, because the outer datagram carries no DF.
+`ContentPaddingAddition` is deliberately *not* in that sum: it goes inside the
+encrypted payload, and the sender clamps each packet's share of it to what that
+packet leaves below the MTU, so it cannot make a full-size packet larger
+however wide the range is.
 
 Every draw also stays at or above 12 bytes on `S1`–`S4`, which is what a header
 protection key needs (see below).

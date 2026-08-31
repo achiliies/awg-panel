@@ -194,7 +194,7 @@ That is a property of the installer, not a promise made here: it regenerates
 none of those, because regenerating the server key alone would break every
 config ever issued.
 
-### The one thing an upgrade will not put right
+### What an upgrade will not put right
 
 Keeping the obfuscation profile is what makes the paragraph above true, and on a
 server installed from **v1.1.1** it is also what leaves a real fault in place.
@@ -219,6 +219,31 @@ Reconfigure** in the panel, then hand out the new client configs. Clearing
 keeps the wider ranges. Servers installed from any release after v1.1.1 draw the
 ranges narrow and are not affected; the panel reports the pairing on any profile
 that has it, however it got there.
+
+**A tunnel MTU above 1408 is the other one**, and it reaches you the same way:
+the upgrade keeps the number, and the number is now out of bounds. The panel
+used to accept an MTU up to 1420, and `install.sh --mtu` still takes anything
+from 1280 to 9000, so a server sitting at 1409 or above is an ordinary one and
+not an exotic one. The budget behind it counted 20 bytes for the outer IP
+header, which is the IPv4 figure; the module reserves 40, because a hostname
+given to `--endpoint` may resolve to an AAAA and nothing in a config records
+which it will. Twenty bytes over is a datagram of up to 1520 on a 1500-byte
+link, and because the outer packet carries no DF it is fragmented rather than
+refused — so the tunnel stays up, small requests work, and large transfers
+stall wherever the fragments do not survive.
+[The per-packet budget](PANEL.md#the-per-packet-budget) has the arithmetic.
+
+The panel does not hide it. A server over the budget carries the overrun on its
+status page, and the **Server** page refuses to save until the MTU comes down —
+on a field you may not have touched, which is the point: the number was already
+wrong before you opened the form. The ceiling is **1408**, the budget less the
+twelve bytes `S4` needs to carry a header protection nonce.
+
+The repair is an operator's again, and at the same reissue cost. The MTU has to
+match at both ends and is written into every config already handed out, so
+lowering it on **Server** means handing those configs out again. Nothing is
+down while you wait — a fragmenting tunnel is slow, not broken — and clients
+keep running on the old number until they are reissued.
 
 On top of it, **a full backup is taken before anything is replaced**. It goes to
 `/var/lib/awg-panel/backups/awg-backup-<date>-<time>.tar.gz`, it is the same

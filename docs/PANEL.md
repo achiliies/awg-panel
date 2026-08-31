@@ -780,8 +780,10 @@ at the default MTU.
 
 It is enforced rather than advised because it is the one overrun with no symptom
 at the moment it is made. The interface comes up, the handshake completes, small
-requests work — and only full-size packets are dropped, so what the operator
-sees weeks later is large downloads hanging and some websites never finishing.
+requests work — and what is broken is only the full-size packet, which is not
+even dropped: the outer datagram carries no DF, so it is fragmented rather than
+refused, and it is the fragments a real path discards. What the operator sees
+weeks later is large downloads stalling and some websites never finishing.
 Nothing in any log connects that to a number typed into a form.
 
 The sum is what matters, which is why a per-field bound could not do the job:

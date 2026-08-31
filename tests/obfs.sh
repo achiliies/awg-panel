@@ -80,14 +80,15 @@ RC=$?
 
 # The one case the validator above cannot be asked about, because it is not a
 # config the panel would accept: --mtu takes anything up to 9000, and past
-# OBFS_MTU_BUDGET - OBFS_HEADER_NONCE there is no room left for S4 at all. The header protection key's nonce is read
-# from the first OBFS_HEADER_NONCE bytes of that prefix, so a key written over
-# a missing one is `awg setconf` returning EINVAL and an interface that never
-# comes up - on a box the operator is watching install itself. The key has to be
-# the thing that gives way, and the timers and the trailer switch have to
-# survive it: neither is carried in the padding and neither has anything to do
-# with it. The trailer is sized by the kernel against what the path has already
-# carried, so there is no MTU it can be squeezed out of.
+# OBFS_MTU_BUDGET - OBFS_HEADER_NONCE there is no room left for S4 at all. The
+# header protection key's nonce is read from the first OBFS_HEADER_NONCE bytes
+# of that prefix, so a key written over a missing one is `awg setconf`
+# returning EINVAL and an interface that never comes up - on a box the operator
+# is watching install itself. The key has to be the thing that gives way, and
+# the timers and the trailer switch have to survive it: neither is carried in
+# the padding and neither has anything to do with it. The trailer is sized by
+# the kernel against what the path has already carried, so there is no MTU it
+# can be squeezed out of.
 echo "  jumbo MTU: the key gives way, the timers and the trailers do not"
 for mtu in $(( OBFS_MTU_BUDGET - OBFS_HEADER_NONCE + 1 )) 1500 9000; do
     gen_obfuscation "$mtu"
