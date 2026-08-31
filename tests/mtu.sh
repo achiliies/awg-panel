@@ -8,9 +8,10 @@
 # direction as the code it audits. This drives the module install.sh builds
 # across a link of a known width and asks the kernel what actually happened.
 #
-# The measurement is IpFragCreates out of /proc/net/snmp in the sending
-# namespace. That counter is the whole point of this file, because it is the
-# only thing on the box that distinguishes the two states the tunnel can be in:
+# The measurement is FragCreates out of /proc/net/snmp in the sending namespace,
+# and Ip6FragCreates out of /proc/net/snmp6 when the endpoint is reached over
+# IPv6. That counter is the whole point of this file, because it is the only
+# thing on the box that distinguishes the two states the tunnel can be in:
 #
 #   - the datagram fits, and is delivered
 #   - the datagram does not fit, is cut into fragments, and is delivered
@@ -32,9 +33,18 @@
 # networks discard IPv4 fragments outright. What the operator is told is that
 # downloads are slow.
 #
-# So a fragment here is a failure, not a warning. Nothing about a full-size
-# packet needs to be fragmented on a link this wide; if one is, the profile is
-# spending more bytes than it has.
+# So a fragment on a 1500-byte link is a failure, not a warning. Nothing about a
+# full-size packet needs to be fragmented on a link that wide; if one is, the
+# profile is spending more bytes than it has. Under 1500 it is printed instead -
+# see ENFORCED, which draws the line tests/wire.py draws between its two Links.
+#
+# Both address families, because the budget is drawn against the larger outer
+# header and the endpoint's family is not the generator's to know: install.sh
+# takes a hostname for --endpoint, and a client that resolves it to an AAAA pays
+# twenty bytes more with nothing in its config recording which it will be. One
+# family per pass, and the tunnel inside stays IPv4 either way, so the only
+# thing that moves between the two passes is the header the datagram is wrapped
+# in - which is the whole of what the budget had wrong.
 #
 # Root is needed to make the namespaces, and the amneziawg module has to be
 # loadable. Both are why this is a shell test on the side rather than part of
@@ -42,9 +52,15 @@
 #
 # Usage: sudo tests/mtu.sh [link-mtu ...]      (default: 1500 1492)
 #
-# Exit 0 - full-size traffic crossed every link whole
-#      1 - it fragmented on at least one of them
+# Exit 0 - full-size traffic crossed every 1500-byte link whole, over every
+#          address family this box could measure
+#      1 - it fragmented on one of those, or a counter could not be read
 #      2 - could not run here: no iproute2, no awg, not root, or no module
+#
+# A fragment on a link narrower than 1500 is printed and leaves the exit code
+# alone. Which families actually ran is printed at the end, because a box with
+# IPv6 compiled out measures half of this and must not read like one that
+# measured all of it.
 
 set -uo pipefail
 
@@ -59,26 +75,50 @@ VETH_S="vmtus"
 VETH_C="vmtuc"
 NET4_S="198.51.100.1"
 NET4_C="198.51.100.2"
+# A ULA, so nothing here can route anywhere. The /64 is what gives the two ends
+# a connected route to each other; the tunnel inside stays IPv4 either way.
+NET6_S="fd00:5100::1"
+NET6_C="fd00:5100::2"
 TUN4_S="10.13.99.1"
 TUN4_C="10.13.99.2"
 PORT=51899
 
-# The outer IP header the budget is drawn against, which is not the one this
-# harness puts on the wire. The veth below is IPv4, so what is measured here
-# carries a 20-byte header; lib/obfs.sh and panel/awg/validate.py both reserve
-# 40, because install.sh takes a hostname for --endpoint and a client resolving
-# it to an AAAA pays the larger one with nothing in its config saying so. Both
-# figures are printed, and the advice on a failure names this one - advice
-# against the measured 20 would recommend a pair the panel refuses and a
-# datagram that fragments the moment the endpoint resolves to an AAAA.
-OUTER=40
+# The two outer headers, and tests/wire.py's IPV4 and IPV6 by another name. The
+# budget reserves the larger one whichever the endpoint turns out to be, because
+# a hostname handed to --endpoint can resolve to an AAAA and nothing in the
+# config records that it did - the module reserves the same way and in the same
+# place, `dev->mtu = ETH_DATA_LEN - overhead` with `overhead` counting
+# max(sizeof(struct ipv6hdr), sizeof(struct iphdr)) (device.c:324). So the
+# diagnosis below names the header of the family that was measured, and the
+# advice names HDR6 whatever was measured: advice against the smaller one is
+# advice to build a pair the panel refuses and a datagram that fragments the
+# moment a client resolves the endpoint to an AAAA.
+HDR4=20
+HDR6=40
+
+# The width at which a fragment stops being a report and becomes a failure. The
+# same line tests/wire.py draws between ETHERNET and PPPOE, and drawn here for
+# the same reason: a plain 1500-byte path is the widest untunnelled link there
+# is and the one the module reserves for, so a profile that will not cross it
+# whole has nowhere left to go. How much margin to leave under 1500 - for the
+# 1492 of the PPPoE link most home clients sit behind - is a decision about who
+# this software is for and not an arithmetic error, so it is printed at the
+# width it happened and left to whoever picks the default MTU.
+ENFORCED=1500
 
 R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
 fail=0
+reported=0
+measured=0
 
 note() { printf '%s\n' "$*"; }
 bad()  { printf '%s✗%s %s\n' "$R" "$N" "$*"; fail=1; }
 good() { printf '%s✓%s %s\n' "$G" "$N" "$*"; }
+# The same shape as bad() and deliberately not the same effect - see ENFORCED.
+# It carries no count of its own: it is used both for an overrun under 1500 and
+# for a pass that could not be taken at all, and a summary that added those
+# together would report a skipped family as a profile that overran.
+warn() { printf '%s!%s %s\n' "$Y" "$N" "$*"; }
 
 LINKS=("$@")
 (( ${#LINKS[@]} )) || LINKS=(1500 1492)
@@ -190,8 +230,8 @@ S4=${S4:-0}
 note "== the profile under test =="
 note "   from   ${SOURCE}"
 note "   MTU ${MTU}   S4 ${S4}"
-note "   datagram   $(( MTU + S4 + 32 + 8 + 20 )) bytes over IPv4, which is what the veth below carries"
-note "              $(( MTU + S4 + 32 + 8 + OUTER )) bytes over IPv6, which is what the budget reserves for"
+note "   datagram   $(( MTU + S4 + 32 + 8 + HDR4 )) bytes over IPv4"
+note "              $(( MTU + S4 + 32 + 8 + HDR6 )) bytes over IPv6, what the budget reserves for"
 note
 
 # ------------------------------------------------------------- the counters
@@ -206,6 +246,28 @@ snmp() {
                  print $(col[want]); exit }'
 }
 
+# /proc/net/snmp6 is a flat "name value" table, one counter to a line, so there
+# is no header row to line up against and no column to count. Kept apart from
+# snmp() rather than folded into it: the two files share a directory and nothing
+# else, and a reader that tried to parse both would be harder to check than two.
+snmp6() {
+    ip netns exec "$1" cat /proc/net/snmp6 2>/dev/null |
+        awk -v want="$2" '$1 == want { print $2; exit }'
+}
+
+# Which counter is which family's is the only thing that changes between the two
+# passes, so it is the only thing these two decide. IPv6 has no fragmentation in
+# routers at all, so on that pass every fragment counted was cut by one of the
+# two hosts - which is where the oversized datagram is made, and both namespaces
+# are read either way.
+frags() {
+    if (( $2 == 4 )); then snmp "$1" FragCreates; else snmp6 "$1" Ip6FragCreates; fi
+}
+
+reasms() {
+    if (( $2 == 4 )); then snmp "$1" ReasmReqds; else snmp6 "$1" Ip6ReasmReqds; fi
+}
+
 # ------------------------------------------------------------- the harness
 
 # Both interfaces are created inside the namespace that will use them, so each
@@ -214,7 +276,7 @@ snmp() {
 # over loopback there is nothing to be too large for, which is the flaw in the
 # self-tests this file exists beside.
 build() {
-    local link=$1 conf_s conf_c priv_s priv_c pub_s pub_c
+    local family=$1 link=$2 conf_s conf_c priv_s priv_c pub_s pub_c ep_s
 
     ip netns add "$NS_S" || return 1
     ip netns add "$NS_C" || return 1
@@ -222,8 +284,24 @@ build() {
     ip link set "$VETH_S" netns "$NS_S" || return 1
     ip link set "$VETH_C" netns "$NS_C" || return 1
 
-    ip -n "$NS_S" addr add "${NET4_S}/30" dev "$VETH_S"
-    ip -n "$NS_C" addr add "${NET4_C}/30" dev "$VETH_C"
+    # One family on the veth and not both, so nothing the other one sends can
+    # reach the counters read below. Return 2 rather than 1 when an address will
+    # not go on: that is this box declining to carry the family, which is a pass
+    # not measured, and it must not borrow the code that means the tunnel broke.
+    #
+    # `nodad` because a fresh IPv6 address is tentative until duplicate address
+    # detection has finished with it and a socket bound to a tentative address
+    # is refused - on a two-host link with made-up ULAs there is nothing for DAD
+    # to find, and waiting for it is a second of nothing on every pass.
+    if (( family == 4 )); then
+        ip -n "$NS_S" addr add "${NET4_S}/30" dev "$VETH_S" || return 2
+        ip -n "$NS_C" addr add "${NET4_C}/30" dev "$VETH_C" || return 2
+        ep_s="${NET4_S}:${PORT}"
+    else
+        ip -n "$NS_S" addr add "${NET6_S}/64" dev "$VETH_S" nodad || return 2
+        ip -n "$NS_C" addr add "${NET6_C}/64" dev "$VETH_C" nodad || return 2
+        ep_s="[${NET6_S}]:${PORT}"
+    fi
     ip -n "$NS_S" link set mtu "$link" up dev "$VETH_S" || return 1
     ip -n "$NS_C" link set mtu "$link" up dev "$VETH_C" || return 1
     ip -n "$NS_S" link set lo up
@@ -243,8 +321,8 @@ build() {
     {
         printf '[Interface]\nPrivateKey = %s\n' "$priv_c"
         printf '%s\n' "$OBFS"
-        printf '[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\nEndpoint = %s:%s\n' \
-               "$pub_s" "$TUN4_S" "$NET4_S" "$PORT"
+        printf '[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\nEndpoint = %s\n' \
+               "$pub_s" "$TUN4_S" "$ep_s"
     } > "$conf_c"
 
     ip -n "$NS_S" link add "$DEV_S" type amneziawg || { rm -f "$conf_s" "$conf_c"; return 1; }
@@ -262,73 +340,165 @@ build() {
     return 0
 }
 
-# One link width, end to end. Returns non-zero if the tunnel would not come up
-# at all; fragments are reported through `bad` rather than the return value,
-# because a run that fragments is a failure of the profile and not of the test.
+# One link width over one address family, end to end. Returns non-zero if the
+# tunnel would not come up at all; fragments are reported through `bad` or
+# `warn` rather than the return value, because a run that fragments is a failure
+# of the profile and not of the test.
 measure() {
-    local link=$1 before_c before_s after_c after_s reasm ping_rc fit_mtu fit_s4
+    local family=$1 link=$2
+    local before_c before_s after_c after_s reasm_c reasm_s reasm made rc
+    local ping_c ping_s hdr fit_mtu fit_s4 where
+
+    where="link ${link} over IPv${family}"
+
+    # IPv6 will not put a link under 1280 up at all, so there is nothing here to
+    # measure rather than something that failed to measure. Only reachable when
+    # a width was passed on the command line: the defaults are both above it.
+    if (( family == 6 && link < 1280 )); then
+        warn "${where}: under the 1280-byte IPv6 minimum, so it was not measured"
+        return 0
+    fi
+
+    hdr=$HDR4
+    (( family == 4 )) || hdr=$HDR6
 
     cleanup
-    if ! build "$link"; then
-        bad "link ${link}: the namespaces or the interfaces would not come up"
+    build "$family" "$link"
+    rc=$?
+    if (( rc == 2 )); then
+        warn "${where}: this box would not take the addresses, so it was not measured"
+        return 0
+    fi
+    if (( rc != 0 )); then
+        bad "${where}: the namespaces or the interfaces would not come up"
         return 1
     fi
 
     # Small first, so the handshake is done and the tunnel is known to work
     # before anything is counted. A failure here is not a fragment problem.
     if ! ip netns exec "$NS_C" ping -c 2 -W 5 -q "$TUN4_S" >/dev/null 2>&1; then
-        bad "link ${link}: no handshake - the tunnel never came up"
+        bad "${where}: no handshake - the tunnel never came up"
         return 1
     fi
 
-    before_c=$(snmp "$NS_C" FragCreates)
-    before_s=$(snmp "$NS_S" FragCreates)
+    before_c=$(frags "$NS_C" "$family")
+    before_s=$(frags "$NS_S" "$family")
+
+    # An unreadable counter is not zero fragments. Every subtraction below reads
+    # an empty string as 0, so a pass that could not find the file at all would
+    # print a clean result on a measurement it never took - which is the one
+    # outcome this whole file exists to rule out.
+    if [[ -z "$before_c" || -z "$before_s" ]]; then
+        bad "${where}: the fragment counters could not be read, so nothing was measured"
+        return 1
+    fi
 
     # -M do sets DF on the *inner* packet, which is what makes it exactly MTU
     # bytes rather than something the client fragments before the tunnel sees
     # it. The DF that is missing is on the outer datagram, and no ping option
-    # can set that one - it is skb->ignore_df in the module.
+    # can set that one - it is skb->ignore_df in the module (socket.c:85 on the
+    # IPv4 path and socket.c:151 on the IPv6 one).
     #
-    # Both directions: download is server to client, and it is the direction an
-    # operator notices, so a test that only pushed one way could pass on the
-    # half nobody complains about.
+    # Both directions, and both return codes: download is server to client and
+    # it is the direction an operator notices, so a test that only read the
+    # client's result could pass on the half nobody complains about.
     ip netns exec "$NS_C" ping -c 10 -W 5 -q -M 'do' -s $(( MTU - 28 )) "$TUN4_S" >/dev/null 2>&1
-    ping_rc=$?
+    ping_c=$?
     ip netns exec "$NS_S" ping -c 10 -W 5 -q -M 'do' -s $(( MTU - 28 )) "$TUN4_C" >/dev/null 2>&1
+    ping_s=$?
 
-    after_c=$(snmp "$NS_C" FragCreates)
-    after_s=$(snmp "$NS_S" FragCreates)
-    reasm=$(( $(snmp "$NS_C" ReasmReqds) + $(snmp "$NS_S" ReasmReqds) ))
+    after_c=$(frags "$NS_C" "$family")
+    after_s=$(frags "$NS_S" "$family")
+    reasm_c=$(reasms "$NS_C" "$family")
+    reasm_s=$(reasms "$NS_S" "$family")
+    # Through names rather than the command substitutions themselves: an empty
+    # substitution inside $(( )) is a syntax error, an empty name is the 0 it
+    # ought to be, and these can come back empty on a kernel without the file.
+    reasm=$(( reasm_c + reasm_s ))
 
-    local made=$(( (after_c - before_c) + (after_s - before_s) ))
+    made=$(( (after_c - before_c) + (after_s - before_s) ))
+    # Counted here and not at the top of the function: everything above this
+    # line can leave without having measured anything, and a family whose every
+    # pass bailed must not be listed at the end as one that ran.
+    measured=$(( measured + 1 ))
     if (( made > 0 )); then
         # Said in this order on purpose. The ping passing is not incidental to
         # the failure, it is the failure: it is what every earlier check in this
         # repository was measuring, and it is what an operator sees before the
         # config reaches a path where the fragments do not survive.
-        bad "link ${link}: full-size traffic passed, and cut ${made} fragment(s) to do it" \
-            "($reasm reassembled)"
-        fit_mtu=$(( link - S4 - 32 - 8 - OUTER ))
-        fit_s4=$(( link - MTU - 32 - 8 - OUTER ))
+        if (( link >= ENFORCED )); then
+            bad "${where}: full-size traffic passed, and cut ${made} fragment(s) to do it" \
+                "($reasm reassembled)"
+        else
+            warn "${where}: full-size traffic passed, and cut ${made} fragment(s) to do it" \
+                 "($reasm reassembled) - under ${ENFORCED}, so this is printed and not failed"
+            reported=$(( reported + 1 ))
+        fi
+        fit_mtu=$(( link - S4 - 32 - 8 - HDR6 ))
+        fit_s4=$(( link - MTU - 32 - 8 - HDR6 ))
         (( fit_s4 > 0 )) || fit_s4=0
-        note "        a datagram of $(( MTU + S4 + 32 + 8 + 20 )) bytes over IPv4 does not fit ${link}"
-        note "        the budget reserves ${OUTER} bytes for the outer header and not the 20"
-        note "        measured here, so lower MTU to ${fit_mtu}, or S4 to ${fit_s4}"
-    elif (( ping_rc != 0 )); then
-        bad "link ${link}: no fragments, but full-size traffic did not get through"
+        note "        a datagram of $(( MTU + S4 + 32 + 8 + hdr )) bytes over IPv${family} does"
+        note "        not fit ${link}. The budget reserves ${HDR6} for the outer header whatever"
+        note "        the endpoint resolves to, so lower MTU to ${fit_mtu}, or S4 to ${fit_s4}"
+    elif (( ping_c != 0 || ping_s != 0 )); then
+        bad "${where}: no fragments, but full-size traffic did not get through"
     else
-        good "link ${link}: full-size traffic passed whole, no fragments"
+        good "${where}: full-size traffic passed whole, no fragments"
     fi
     return 0
 }
 
-note "== full-size traffic across a link of each width =="
+# Validated once and up front rather than inside the loop below, which would
+# otherwise say the same thing about the same bad argument on every family.
+CHECKED=()
 for link in "${LINKS[@]}"; do
-    [[ "$link" =~ ^[0-9]+$ ]] || { bad "'${link}' is not a link MTU"; continue; }
-    measure "$link"
+    if [[ "$link" =~ ^[0-9]+$ ]]; then
+        CHECKED+=("$link")
+    else
+        bad "'${link}' is not a link MTU"
+    fi
+done
+
+# IPv6 has to be in the kernel before there is anything to measure over it. A
+# fresh namespace comes up with its own net sysctls at their defaults, so a host
+# that has set net.ipv6.conf.all.disable_ipv6 has not disabled it inside the
+# namespaces made below - but a kernel booted with ipv6.disable=1 has no
+# /proc/net/snmp6 and no inet6 at all, and that is what this asks about.
+HAVE6=1
+[[ -e /proc/net/snmp6 ]] || HAVE6=0
+
+RAN=""
+note "== full-size traffic across a link of each width, over each family =="
+for family in 4 6; do
+    if (( family == 6 && ! HAVE6 )); then
+        warn "IPv6: no /proc/net/snmp6, so this kernel carries no IPv6 - and the family"
+        note "    the budget is drawn against is the one this box cannot measure"
+        continue
+    fi
+    done_before=$measured
+    for link in "${CHECKED[@]}"; do
+        measure "$family" "$link"
+    done
+    # Listed only if a pass on this family actually reached the counters. Every
+    # width can be skipped - an IPv6 run given nothing but links under 1280 is
+    # the plain case - and a family named here that measured none of them would
+    # be the summary saying the opposite of what happened.
+    (( measured > done_before )) && RAN="${RAN} IPv${family}"
 done
 
 note
+# Printed on every run, passing or not. A box with IPv6 compiled out measures
+# half of what this file is about - the outer header the budget was corrected
+# for is the IPv6 one - and a run that quietly did half must not read like a run
+# that did all of it.
+note "families measured:${RAN:- none}"
+if (( reported )); then
+    note
+    note "${reported} overrun(s) above are on links narrower than ${ENFORCED} and are printed"
+    note "rather than failed. How much margin to leave under an ordinary 1500-byte path is"
+    note "a decision about who this software is for and not an arithmetic error; tests/wire.py"
+    note "and tests/obfs.sh print the same number from the arithmetic side."
+fi
 if (( fail )); then
     note "The handshake burst is not measured here. With RandomTrailers on, every"
     note "packet sent at handshake time is padded into a window derived from the"
