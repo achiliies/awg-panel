@@ -2,3 +2,11 @@ dist/
 vendor/
 .agents/
 /AGENTS.md
+
+# tests/ gained an importable module with tests/wire.py - the packet-size model
+# both halves of the suite measure against - and importing it leaves bytecode
+# beside it. Everything else here is a script that is run rather than imported,
+# so this had nothing to ignore until now. panel/.gitignore says the same for
+# its own tree.
+__pycache__/
+*.pyc

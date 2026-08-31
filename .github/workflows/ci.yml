@@ -44,7 +44,7 @@ jobs:
                    tests/uninstall.sh tests/acme.sh tests/bundle.sh \
                    tests/prompt.sh tests/detect.sh tests/power.sh \
                    tests/update.sh tests/i18n.sh tests/ports.sh tests/get.sh \
-                   tests/kernel.sh tests/report.sh tests/conf.sh \
+                   tests/kernel.sh tests/report.sh tests/conf.sh tests/mtu.sh \
                    panel/install-panel.sh panel/lock-deps.sh \
                    panel/fetch-wheels.sh lib/*.sh \
                    bin/awg-menu bin/awg-uninstall bin/awg-panel bin/awg-update; do
@@ -61,7 +61,7 @@ jobs:
             tests/subnet6.sh tests/recovery.sh tests/shaper.sh tests/uninstall.sh \
             tests/acme.sh tests/bundle.sh tests/prompt.sh tests/detect.sh \
             tests/power.sh tests/update.sh tests/i18n.sh tests/ports.sh \
-            tests/get.sh tests/kernel.sh tests/report.sh tests/conf.sh \
+            tests/get.sh tests/kernel.sh tests/report.sh tests/conf.sh tests/mtu.sh \
             panel/install-panel.sh panel/lock-deps.sh panel/fetch-wheels.sh lib/*.sh \
             bin/awg-menu bin/awg-uninstall bin/awg-panel bin/awg-update
 
@@ -127,6 +127,26 @@ jobs:
       # nothing but the standard library.
       - name: The shaping commands are ones the kernel takes
         run: sudo tests/shaper.sh
+
+      # The only check in the repository that watches a datagram cross a link
+      # narrower than itself. Every other MTU check is arithmetic against a
+      # budget constant, and install.sh's self-test and awg-menu's both run the
+      # tunnel over loopback, where nothing can be too large for the link - so a
+      # profile that fragments on a real path passes all of them.
+      #
+      # Exit 2 is "could not run here" - no awg, no module - which is a stock
+      # runner and not a failure. Exit 1 is a profile that fragments, and that
+      # is one. Wired up on a runner that will always skip so that the day one
+      # has AmneziaWG on it this starts checking rather than has to be
+      # remembered; the script prints which of the reasons it was.
+      - name: Full-size traffic crosses a real link without fragmenting
+        run: |
+          sudo tests/mtu.sh || rc=$?
+          if [ "${rc:-0}" = 2 ]; then
+            echo "skipped: see the reason above"
+          else
+            exit "${rc:-0}"
+          fi
 
       # A renewal timer and a deploy hook outlive an uninstall silently: there
       # is no panel left for either to affect, so nothing an admin looks at

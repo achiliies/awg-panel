@@ -13,6 +13,7 @@ import re
 import struct
 import sys
 
+import wire
 from awg import validate
 
 # Everything the installed module supports on the release install.sh pins.
@@ -29,6 +30,14 @@ FEATURES = {
 TAG = re.compile(r"<\s*(r|b)\s*([^>]*?)\s*>")
 
 failures: list[str] = []
+
+# Bytes to spare on each link, per profile. Collected rather than asserted for
+# anything below a 1500-byte one: how much margin to leave under Ethernet is a
+# decision about who this software is for - a home client behind PPPoE has 1492
+# and nothing in the config can discover that - and a test is the wrong place
+# to make it. Printing the tightest draw puts the number in front of whoever
+# does.
+margins: dict[str, list[int]] = {link.name: [] for link in wire.LINKS}
 
 
 def fail(profile: int, message: str) -> None:
@@ -195,6 +204,52 @@ def check(number: int, values: dict[str, str]) -> None:
     if drawn:
         check_advanced_bands(number, values)
 
+    check_wire(number, values)
+
+
+def check_wire(number: int, values: dict[str, str]) -> None:
+    """The datagram this profile puts on the wire, against the link it crosses.
+
+    The generator draws S4 against MTU_BUDGET and the validator refuses a pair
+    that exceeds it, so a profile that reached here has already been agreed to
+    fit. Both of them are reading the same constant, though, and a constant is
+    exactly the thing two implementations can agree about and both have wrong.
+    This walks the packet layout instead - tests/wire.py, built from the module
+    install.sh pins - and asks the only question that matters on the wire: how
+    big is the datagram, and does it cross a 1500-byte link without being cut
+    in half.
+
+    Both address families, because the endpoint's is not the generator's to
+    know. install.sh takes a hostname for --endpoint and a client that resolves
+    it to an AAAA pays twenty bytes more than an IPv4 one, with nothing in the
+    config recording which it will be.
+
+    The handshake burst is measured beside the data packets rather than assumed
+    to be smaller than them. With RandomTrailers on it very nearly is - the
+    trailer is drawn against a window derived from the largest data packet - but
+    that relationship is a consequence of two settings that are edited
+    separately, and it is worth one assertion that it still holds.
+    """
+    try:
+        profile = {
+            key: int(values[key])
+            for key in ("MTU", "S1", "S2", "S3", "S4", "Jmax")
+        }
+    except (KeyError, ValueError) as exc:
+        fail(number, f"wire sizes could not be measured: {exc}")
+        return
+    profile["RandomTrailers"] = 1 if values.get("RandomTrailers") == "on" else 0
+
+    imitation = tuple(
+        len(render(values[f"I{n}"])) for n in range(1, 6) if values.get(f"I{n}")
+    )
+
+    for link in wire.LINKS:
+        margins[link.name].append(wire.headroom(profile, link, imitation))
+
+    if wire.headroom(profile, wire.ETHERNET, imitation) < 0:
+        fail(number, wire.explain(profile, wire.ETHERNET, imitation))
+
 
 def check_advanced_bands(number: int, values: dict[str, str]) -> None:
     """The advanced values against the panel's own bands, read from the panel.
@@ -305,6 +360,19 @@ def main(path: str) -> int:
     for number, row in enumerate(rows, start=1):
         values = dict(field.split("=", 1) for field in row.split("\t"))
         check(number, values)
+
+    # Printed either way, and before the verdict. On a passing run it is the
+    # number whoever picks the default MTU needs; on a failing one it is the
+    # first thing worth reading, because a link the profiles miss by four bytes
+    # and one they miss by forty are the same list of failures and not the same
+    # problem.
+    for link in wire.LINKS:
+        drawn = margins[link.name]
+        if drawn:
+            print(
+                f"  {'ok   ' if min(drawn) >= 0 else 'note '} {link.name} ({link.mtu},"
+                f" {link.why}): {min(drawn)} byte(s) to spare at the tightest draw"
+            )
 
     if failures:
         print(f"  FAIL  {len(failures)} problem(s) in {len(rows)} profiles")
