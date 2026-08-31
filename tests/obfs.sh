@@ -41,12 +41,14 @@ echo "obfuscation generator: ${ROUNDS} profiles"
 # One profile per line as key=value pairs, which is all the checker needs.
 for (( round = 0; round < ROUNDS; round++ )); do
     # A different MTU each time, because S4 is drawn against the room left by
-    # it. 1420 is the largest the panel accepts and so the tightest case: it
-    # leaves 20 bytes, half the width S4 would otherwise be drawn from.
+    # it. The ceiling is the tightest case and is computed rather than typed:
+    # the panel's own MTU bound is OBFS_MTU_BUDGET less the header protection
+    # nonce, so a literal here would keep sweeping a value the panel had stopped
+    # accepting - and would stop covering the one that replaced it.
     case $(( round % 4 )) in
         0) mtu=1400 ;;
         1) mtu=1280 ;;
-        2) mtu=1420 ;;
+        2) mtu=$(( OBFS_MTU_BUDGET - OBFS_HEADER_NONCE )) ;;
         *) mtu=1360 ;;
     esac
     gen_obfuscation "$mtu"
@@ -77,8 +79,8 @@ PYTHONPATH="$REPO/panel" "$PY" "$REPO/tests/obfs_check.py" "$WORK/profiles.tsv"
 RC=$?
 
 # The one case the validator above cannot be asked about, because it is not a
-# config the panel would accept: --mtu takes anything up to 9000, and past 1428
-# there is no room left for S4 at all. The header protection key's nonce is read
+# config the panel would accept: --mtu takes anything up to 9000, and past
+# OBFS_MTU_BUDGET - OBFS_HEADER_NONCE there is no room left for S4 at all. The header protection key's nonce is read
 # from the first OBFS_HEADER_NONCE bytes of that prefix, so a key written over
 # a missing one is `awg setconf` returning EINVAL and an interface that never
 # comes up - on a box the operator is watching install itself. The key has to be
@@ -87,7 +89,7 @@ RC=$?
 # with it. The trailer is sized by the kernel against what the path has already
 # carried, so there is no MTU it can be squeezed out of.
 echo "  jumbo MTU: the key gives way, the timers and the trailers do not"
-for mtu in 1429 1500 9000; do
+for mtu in $(( OBFS_MTU_BUDGET - OBFS_HEADER_NONCE + 1 )) 1500 9000; do
     gen_obfuscation "$mtu"
     if [[ -n "$HPK" ]]; then
         echo "  FAIL  MTU ${mtu} left S4=${S4}, and a header protection key was drawn anyway"
@@ -102,7 +104,8 @@ for mtu in 1429 1500 9000; do
         RC=1
     fi
 done
-(( RC == 0 )) && echo "  ok    no key drawn at MTU 1429, 1500 or 9000; timers and trailers still drawn"
+(( RC == 0 )) && echo "  ok    no key drawn above the budget, at 1500 or at 9000;"\
+                       "timers and trailers still drawn"
 
 # The other direction, and the one that matters: a check that only ever says no
 # is indistinguishable from one that is not wired up. These are the ranges

@@ -239,10 +239,21 @@ JMIN_RANGE = (24, 80)
 JSPAN_RANGE = (40, 240)
 S_RANGE = (24, 320)
 # S4 rides on every data packet rather than on handshakes alone, so it is
-# capped twice: in itself, and against the MTU. An ordinary 1500-byte path
-# leaves 1440 bytes for the tunnel, and S4 comes out of that.
+# capped twice: in itself, and against the MTU. What an ordinary 1500-byte path
+# leaves for the tunnel is 8 bytes of UDP, 32 of transport header and tag, and
+# the outer IP header, and S4 comes out of what is left.
+#
+# 40 for that IP header and not 20. The endpoint's address family is not the
+# operator's to choose - a hostname that resolves to an AAAA costs the larger
+# header and says so nowhere - and the module reserves the same way, with
+# `overhead` counting max(sizeof(struct ipv6hdr), sizeof(struct iphdr)) in
+# device.c. Budgeting 1440 was budgeting 20 bytes the kernel had already spent,
+# and what it bought was a datagram too large for the wire: not dropped with an
+# ICMP, because the outer packet carries no DF (skb->ignore_df, socket.c), but
+# fragmented, and fragments are what a real path discards. See tests/wire.py
+# for the layout and tests/mtu.sh for the same number measured on a link.
 S4_RANGE = (HEADER_NONCE, 40)
-MTU_BUDGET = 1440
+MTU_BUDGET = 1420
 DEFAULT_MTU = 1400
 
 # What the kernel pads a data packet to when nothing else is configured: the
@@ -576,8 +587,8 @@ _SPECS: list[ParamSpec] = [
         help_long=(
             "S4 pads transport packets, the ones carrying your actual traffic. Unlike S1-S3 it "
             "applies constantly, so every byte here is a byte of usable MTU gone: on an "
-            "ordinary 1500-byte path the tunnel MTU has to be at most 1440 - S4 or full-size "
-            "packets are silently dropped and pages hang half-loaded. Both ends must agree. "
+            "ordinary 1500-byte path the tunnel MTU has to be at most 1420 - S4 or full-size "
+            "packets are fragmented and large transfers stall. Both ends must agree. "
             "It still earns its keep, because without it a tunnel packet is always the packet "
             "inside it plus a constant, and that constant is worth hiding. Reconfigure draws "
             "12 to 40 bytes and never more than the MTU leaves free, so the tunnel keeps "
@@ -1075,17 +1086,22 @@ _SPECS: list[ParamSpec] = [
         help_short="Largest packet the tunnel carries. Too high and big packets vanish.",
         help_long=(
             "The tunnel wraps every packet in headers of its own, so the MTU inside has to be "
-            "smaller than the path outside. 1400 leaves room for the usual 60 bytes of "
-            "overhead on a 1500-byte path plus the S4 junk prefix. Set it too high and you get "
-            "the classic half-broken tunnel: small requests work, large downloads and some "
-            "websites hang forever, because only full-size packets are being dropped. Below "
-            "1280 breaks IPv6. Raising S4 means lowering this by the same amount. Clients "
-            "should use the same number, and the panel writes it into every config it "
-            "generates."
+            "smaller than the path outside. 1400 leaves room for the 80 bytes of overhead on a "
+            "1500-byte path - 8 of UDP, 32 of transport header and tag, and 40 for an outer IP "
+            "header that may be IPv6 - plus the S4 junk prefix. Set it too high and you get the "
+            "classic half-broken tunnel: small requests work, large downloads and some websites "
+            "hang forever, because full-size packets are being fragmented and the fragments are "
+            "what a real path drops. Below 1280 breaks IPv6. Raising S4 means lowering this by "
+            "the same amount. Clients should use the same number, and the panel writes it into "
+            "every config it generates."
         ),
         must_match_client=True,
         min=1280,
-        max=1420,
+        # MTU_BUDGET less the header protection nonce, so the largest MTU the
+        # panel accepts still leaves S4 enough room to carry one. A ceiling
+        # equal to the budget would be arithmetically fine and would quietly
+        # take both S4 and header protection away from anyone who used it.
+        max=MTU_BUDGET - HEADER_NONCE,
         recommended="1400",
         default="1400",
     ),

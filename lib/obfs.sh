@@ -48,7 +48,7 @@
 #
 # Where a header protection key was drawn, that is a peer on exactly 3.0:
 # anything older already fails on the key beside it, and fails the same silent
-# way. Where one was not - an --mtu of 1429 or more leaves S4 no room for the
+# way. Where one was not - an --mtu of 1409 or more leaves S4 no room for the
 # nonce, and no key is written at all - there is nothing else in the config that
 # fails outright, because a peer too old for the padding or the timers ignores
 # those lines and stays up. On that server this switch is the only hard stop,
@@ -199,9 +199,31 @@ obfs_trailer_footgun() {
     OBFS_TRAILER_LOSS=$(obfs_loss_phrase "$total")
 }
 
-# An ordinary 1500-byte path leaves 1440 bytes for the tunnel, and S4 comes
-# out of that because it rides on every data packet rather than on handshakes.
-OBFS_MTU_BUDGET=1440
+# What an ordinary 1500-byte path leaves for the tunnel once the datagram is
+# wrapped: 8 bytes of UDP, 32 of transport header and authentication tag, and
+# the outer IP header. S4 comes out of it too, because it rides on every data
+# packet rather than on handshakes.
+#
+# 40 for that IP header and not 20, which is the whole of what this constant
+# got wrong until now. The address family is not the operator's to pick: the
+# installer takes a hostname for --endpoint, and a client that resolves it to
+# an AAAA pays the larger header with nothing in its config saying so. The
+# module this installer builds reserves the same way and for the same reason -
+# `dev->mtu = ETH_DATA_LEN - overhead` with `overhead` counting
+# max(sizeof(struct ipv6hdr), sizeof(struct iphdr)) (device.c) - so a budget of
+# 1440 was 20 bytes more generous than the kernel it was budgeting for.
+#
+# What those 20 bytes bought was a datagram that did not fit the wire. Nothing
+# reports that: AmneziaWG clears DF on the outer packet (skb->ignore_df in
+# socket.c), so it is not refused with an ICMP anything can act on, it is
+# fragmented - and fragments are dropped by the middleboxes and reassembly
+# queues out on a real path, not in any lab. What the operator hears is that
+# downloads stall.
+#
+# tests/wire.py holds the packet layout this is derived from, and tests/mtu.sh
+# puts a tunnel on a narrow link and counts the fragments, so this number is
+# now checked rather than asserted.
+OBFS_MTU_BUDGET=1420
 
 # The floor under S1-S4. The key's nonce is read from the first 12 bytes of the
 # prefix on each packet, so a padding size below this is one the kernel refuses

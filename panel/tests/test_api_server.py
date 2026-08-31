@@ -442,10 +442,17 @@ def test_reconfigure_leaves_the_unused_imitation_slots_blank(api, server_conf):
 def test_reconfigure_fits_s4_to_the_configured_mtu(api, server_conf):
     """S4 is added to every data packet, so it is drawn against the room the
     interface's own MTU leaves rather than against an assumed one."""
-    api.put(api_url("server"), {"mtu": 1420}, format="json")
+    # S4 moves with the MTU in one request. The budget is a rule about the pair,
+    # so raising the MTU on its own is refused - correctly - by the S4 already in
+    # the config, and the save that never happened would leave this measuring the
+    # fixture's MTU rather than the one it meant to set.
+    ceiling = validate.PARAMS["MTU"].max
+    room = validate.MTU_BUDGET - ceiling
+    saved = api.put(api_url("server"), {"mtu": ceiling, "params": {"S4": str(room)}}, format="json")
+    assert saved.status_code == 200, saved.content
     for _ in range(12):
         params = api.post(api_url("server/reconfigure"), {}, format="json").json()["params"]
-        assert int(params["S4"]) <= 1440 - 1420
+        assert int(params["S4"]) <= room
 
 
 @pytest.mark.parametrize("profile", ["standard", "dpi", "fast", "random"])
@@ -470,11 +477,14 @@ def test_reconfigure_draws_s4_against_the_saved_mtu_not_a_requested_one(api, ser
     """The MTU is not the caller's to state. Whatever it asks for, the save is
     measured against the config, so drawing against anything else would produce
     a set the budget check then refuses."""
-    api.put(api_url("server"), {"mtu": 1420}, format="json")
+    ceiling = validate.PARAMS["MTU"].max
+    room = validate.MTU_BUDGET - ceiling
+    saved = api.put(api_url("server"), {"mtu": ceiling, "params": {"S4": str(room)}}, format="json")
+    assert saved.status_code == 200, saved.content
     for _ in range(12):
         body = {"profile": "dpi", "mtu": 1280}
         params = api.post(api_url("server/reconfigure"), body, format="json").json()["params"]
-        assert int(params["S4"]) <= 1440 - 1420
+        assert int(params["S4"]) <= room
 
 
 def test_reconfigure_draws_the_whole_page_in_one_go(api, server_conf):

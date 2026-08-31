@@ -799,10 +799,10 @@ the interface up. Send the whole `params` object back unchanged.
 
 `S4` is added to the front of every data packet, so it is drawn against what the
 MTU leaves free. That budget is enforced, not advised: `PUT api/v1/server`
-rejects any `MTU + S4` above 1440, reported against both fields so it is
+rejects any `MTU + S4` above 1420, reported against both fields so it is
 actionable from either page. It is the one overrun with no symptom at the moment
-it is made — the tunnel comes up, small requests work, and only full-size
-packets vanish. `ContentPaddingAddition` is deliberately *not* in that sum: it
+it is made — the tunnel comes up, small requests work, and full-size packets are
+fragmented rather than refused, because the outer datagram carries no DF. `ContentPaddingAddition` is deliberately *not* in that sum: it
 goes inside the encrypted payload, and the sender clamps each packet's share of
 it to what that packet leaves below the MTU, so it cannot make a full-size
 packet larger however wide the range is.

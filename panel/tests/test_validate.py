@@ -27,6 +27,11 @@ ALL_FEATURES = {
     "disable_cookies": True,
 }
 
+# The MTUs worth sweeping, read off the panel's own bounds. Literals here went
+# on testing 1420 after the ceiling moved below it, which is both a value nobody
+# can save and the one value the sweep then stopped covering.
+MTUS = (validate.PARAMS["MTU"].min, 1360, validate.DEFAULT_MTU, validate.PARAMS["MTU"].max)
+
 # A well-formed 32-byte base64 key. Not a real one and never used to connect.
 SAMPLE_KEY = "SMHDaqUpBCB0LJvMCyWkm0aCzWTOMNM3ORNqRTaHY2Y="
 
@@ -370,7 +375,7 @@ def test_content_padding_is_not_charged_to_the_mtu():
     leaves below the MTU - so it cannot make a full-size packet any larger, and
     charging it here would only refuse configurations that work."""
     assert check({"MTU": "1400", "ContentPaddingAddition": "512"}) == {}
-    assert check({"MTU": "1400", "S4": "30", "ContentPaddingAddition": "0-900"}) == {}
+    assert check({"MTU": "1400", "S4": "20", "ContentPaddingAddition": "0-900"}) == {}
 
 
 def test_an_overrun_is_reported_against_every_field_that_can_fix_it():
@@ -382,19 +387,20 @@ def test_an_overrun_is_reported_against_every_field_that_can_fix_it():
 
 def test_padding_exactly_on_the_budget_is_accepted():
     """A bound that rejects the value it tells you to use is a bound nobody
-    can satisfy."""
-    assert check({"MTU": "1400", "S4": "40"}) == {}
+    can satisfy. Read off MTU_BUDGET rather than written down, so it stays on
+    the budget when the budget moves."""
+    assert check({"MTU": "1400", "S4": str(validate.MTU_BUDGET - 1400)}) == {}
 
 
 def test_lowering_the_mtu_makes_the_same_padding_fit():
     over = {"MTU": "1400", "S4": "120"}
     assert check(over)
-    assert check({**over, "MTU": "1320"}) == {}
+    assert check({**over, "MTU": str(validate.MTU_BUDGET - 120)}) == {}
 
 
 def test_padding_switched_off_never_overruns():
     """0 means off in every tool here, so it is not a byte to charge for."""
-    assert check({"MTU": "1420", "S4": "0"}) == {}
+    assert check({"MTU": str(validate.PARAMS["MTU"].max), "S4": "0"}) == {}
 
 
 def test_padding_without_an_mtu_is_left_alone():
@@ -500,10 +506,10 @@ def test_randomize_shares_nothing_between_servers():
 def test_randomize_keeps_s4_inside_the_mtu_headroom():
     """S4 rides on every data packet, so a draw that does not fit silently
     black-holes full-size packets rather than failing loudly."""
-    for mtu in (1280, 1360, 1400, 1420):
+    for mtu in MTUS:
         for _ in range(ROUNDS):
             s4 = int(validate.randomize(mtu=mtu)["S4"])
-            assert s4 <= 1440 - mtu, f"S4 {s4} does not fit an MTU of {mtu}"
+            assert s4 <= validate.MTU_BUDGET - mtu, f"S4 {s4} does not fit an MTU of {mtu}"
 
 
 @pytest.mark.parametrize("mtu", ["1420", 1420])
@@ -657,10 +663,12 @@ def test_no_profile_raises_an_advisory(profile):
 
 @pytest.mark.parametrize("profile", PROFILE_KEYS)
 def test_every_profile_keeps_s4_inside_the_mtu_headroom(profile):
-    for mtu in (1280, 1360, 1400, 1420):
+    for mtu in MTUS:
         for _ in range(ROUNDS):
             s4 = int(validate.randomize(mtu=mtu, profile=profile)["S4"])
-            assert s4 <= 1440 - mtu, f"{profile}: S4 {s4} does not fit an MTU of {mtu}"
+            assert s4 <= validate.MTU_BUDGET - mtu, (
+                f"{profile}: S4 {s4} does not fit an MTU of {mtu}"
+            )
 
 
 @pytest.mark.parametrize("profile", PROFILE_KEYS)
@@ -670,8 +678,10 @@ def test_every_profile_stays_above_the_header_protection_floor(profile):
     The two are drawn by different buttons, and neither can see what the other
     has been asked for, so the only way they cannot contradict each other is for
     no profile to go below the floor at all. Twelve bytes on a data packet is
-    what that costs, out of a headroom that is never less than twenty."""
-    for mtu in (1280, 1360, 1400, 1420):
+    what that costs, out of a headroom that is never less than the floor
+    itself: the largest MTU the panel accepts is MTU_BUDGET - HEADER_NONCE, so
+    the tightest draw there is leaves exactly twelve."""
+    for mtu in MTUS:
         for _ in range(ROUNDS):
             values = validate.randomize(mtu=mtu, profile=profile)
             short = validate.header_protection_short({**values, "HeaderProtectionKey": SAMPLE_KEY})

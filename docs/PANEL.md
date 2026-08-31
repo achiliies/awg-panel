@@ -722,7 +722,7 @@ that argues with the page it fills in is a generator nobody trusts.
 | `Jmin` | junk | 24–80 bytes |
 | `Jmax` | junk | `Jmin` + 40–240 bytes |
 | `S1`, `S2`, `S3` | sizes | 24–320 bytes each, redrawn if `S1 + 56 = S2` |
-| `S4` | sizes | 12–40 bytes, never more than `1440 − MTU` |
+| `S4` | sizes | 12–40 bytes, never more than `1420 − MTU` |
 | `H1`–`H4` | headers | a narrow random range placed anywhere inside one quarter of 5–2147483647, then shuffled between the four |
 | `I1`–`I5` | imitation | three to five packets of one protocol: a WebRTC call, a QUIC connection or a run of DNS lookups |
 | `HeaderProtectionKey` | advanced | 32 bytes from `/dev/urandom`, and only when `S1`–`S4` can carry its 12-byte nonce |
@@ -764,7 +764,7 @@ ends — but both ends still need it, and it does nothing to data packets while
 
 `S4` is the only obfuscation setting charged against the MTU. It is pushed onto
 the front of an already finished packet, so every byte of it comes out of what
-the path leaves after the tunnel: `1440 − MTU` inside an ordinary 1500-byte one.
+the path leaves after the tunnel: `1420 − MTU` inside an ordinary 1500-byte one.
 The panel **refuses** a combination that exceeds it — the save is rejected, not
 warned about, and the error appears on `MTU` and `S4` alike, because the first is
 edited on the Server page and the second on Obfuscation, and an error on a field
@@ -925,7 +925,7 @@ whose importer drops these lines, was already turned away by the key and turned
 away the same silent way.
 
 **Without one**, it turns away every client below 3.1. A server has no key when
-its MTU left `S4` too short to carry the nonce — `install.sh --mtu 1429` or
+its MTU left `S4` too short to carry the nonce — `install.sh --mtu 1409` or
 higher, and *Reconfigure* on a server built that way — and nothing else in the
 group fails outright to cover for it: a client too old for the padding or the
 timers ignores those lines and stays connected, as the table in
@@ -980,12 +980,16 @@ cost anything measurable.
   the same handshake size, and small enough that the padded packet never
   approaches the path MTU. These ride on handshakes only, so they cost nothing
   in steady state.
-- **`S4` at 12–40, capped at `1440 − MTU`.** This is the only one that touches
+- **`S4` at 12–40, capped at `1420 − MTU`.** This is the only one that touches
   data packets, so it is the only one that could cost throughput. At the default
-  MTU of 1400 the cap is 40 bytes, which is the headroom an ordinary 1500-byte
+  MTU of 1400 the cap is 20 bytes, which is the headroom an ordinary 1500-byte
   path leaves after the outer IP and UDP headers, the transport header and the
-  authentication tag. Exceed it and full-size packets are silently dropped and
-  pages hang half-loaded — so the generator does not.
+  authentication tag. The outer IP header is counted at 40 and not 20: the
+  endpoint's address family is not the operator's to choose, and the module
+  reserves for the larger one in exactly the same place. Exceed it and full-size
+  packets are fragmented rather than refused, because the outer datagram carries
+  no DF — and fragments are what a real path drops, so what it looks like is a
+  slow tunnel and not a broken one. `tests/mtu.sh` counts them.
 - **Nothing below 12 on `S1`–`S4`, in any profile.** A header protection key is
   applied with a nonce read off the front of the padding on each packet, so a
   shorter prefix makes the kernel refuse the whole configuration. The two are
