@@ -763,13 +763,19 @@ HDRVER=$(sed -n 's|.*WIREGUARD_VERSION "\(.*\)".*|\1|p' \
 # because it is the case where the fix an admin installed is not running.
 #
 # So the tag wins where the two disagree: it is what was pinned, tested and
-# released, and it is already the name the summary below prints. Only a tag
-# that looks like a release, though - --kmod-ref can name a branch, and
-# "master" is neither a version to register a module under nor one a later
-# build could be compared against. Anything else leaves the header to answer,
-# as before, and the line below says which answer was taken.
+# released, and it is already the name the summary below prints. Only when the
+# tag carries upstream's whole release shape, though - vMAJOR.MINOR.YYYYMMDD,
+# which every ref this project has pinned has been. --kmod-ref takes anything
+# that resolves, and the refs that are not that shape are the ones with no
+# version in them to take: "master" is neither a version to register a module
+# under nor one a later build could be compared against, a branch named "3.1"
+# answers differently next week, and a tag coarser than the header it would
+# replace - v3.2 over a version.h reading 3.2.20261001 - would trade upstream's
+# right answer for a worse one. Only a stale header is worth correcting, and a
+# date is what makes staleness visible. Anything else leaves the header to
+# answer, as before, and the line below says which answer was taken.
 MODVER="$HDRVER"
-if [[ "$KMOD_REF" =~ ^v?[0-9]+(\.[0-9]+)+(-[0-9A-Za-z]+)?$ ]]; then
+if [[ "$KMOD_REF" =~ ^v[0-9]+\.[0-9]+\.20[0-9]{6}$ ]]; then
     MODVER="${KMOD_REF#v}"
 fi
 
@@ -785,7 +791,18 @@ fi
 # On the copy, never on the pins. The clone and the vendor/ cp -a both land in
 # this working directory, so nothing under vendor/ is touched and the commit
 # check above has already passed on the sources as upstream published them.
-if [[ -n "$MODVER" && "$MODVER" != "$HDRVER" ]]; then
+#
+# Guarded on the header, not on MODVER, and the difference is the whole reason
+# the read above ends in "|| true". A version.h upstream has moved or renamed
+# leaves HDRVER empty while MODVER still holds the tag, so a guard that only
+# asked whether there was a version to write would run sed against a file that
+# is not there, and under errexit that ends the install with sed's own message,
+# two lines after announcing a module build - the exact death the read above
+# was written to survive. An empty header also has nothing to correct: there is
+# no stale string in that file to overwrite, MODMAKE below still passes the
+# version to this build, and dkms falls back the way it always has. So this is
+# the same condition the line below prints under, and neither fires.
+if [[ -n "$HDRVER" && "$MODVER" != "$HDRVER" ]]; then
     sed -i "s|^#define WIREGUARD_VERSION \".*\"|#define WIREGUARD_VERSION \"${MODVER}\"|" \
         amneziawg-linux-kernel-module/src/version.h
 fi
