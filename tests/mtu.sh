@@ -63,6 +63,16 @@ TUN4_S="10.13.99.1"
 TUN4_C="10.13.99.2"
 PORT=51899
 
+# The outer IP header the budget is drawn against, which is not the one this
+# harness puts on the wire. The veth below is IPv4, so what is measured here
+# carries a 20-byte header; lib/obfs.sh and panel/awg/validate.py both reserve
+# 40, because install.sh takes a hostname for --endpoint and a client resolving
+# it to an AAAA pays the larger one with nothing in its config saying so. Both
+# figures are printed, and the advice on a failure names this one - advice
+# against the measured 20 would recommend a pair the panel refuses and a
+# datagram that fragments the moment the endpoint resolves to an AAAA.
+OUTER=40
+
 R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
 fail=0
 
@@ -179,7 +189,9 @@ S4=${S4:-0}
 
 note "== the profile under test =="
 note "   from   ${SOURCE}"
-note "   MTU ${MTU}   S4 ${S4}   expected datagram $(( MTU + S4 + 32 + 8 + 20 )) bytes over IPv4"
+note "   MTU ${MTU}   S4 ${S4}"
+note "   datagram   $(( MTU + S4 + 32 + 8 + 20 )) bytes over IPv4, which is what the veth below carries"
+note "              $(( MTU + S4 + 32 + 8 + OUTER )) bytes over IPv6, which is what the budget reserves for"
 note
 
 # ------------------------------------------------------------- the counters
@@ -254,7 +266,7 @@ build() {
 # at all; fragments are reported through `bad` rather than the return value,
 # because a run that fragments is a failure of the profile and not of the test.
 measure() {
-    local link=$1 before_c before_s after_c after_s reasm ping_rc
+    local link=$1 before_c before_s after_c after_s reasm ping_rc fit_mtu fit_s4
 
     cleanup
     if ! build "$link"; then
@@ -296,8 +308,12 @@ measure() {
         # config reaches a path where the fragments do not survive.
         bad "link ${link}: full-size traffic passed, and cut ${made} fragment(s) to do it" \
             "($reasm reassembled)"
-        note "        a datagram of $(( MTU + S4 + 32 + 8 + 20 )) bytes does not fit ${link}"
-        note "        lower MTU to $(( link - S4 - 32 - 8 - 20 )), or S4 to $(( link - MTU - 60 ))"
+        fit_mtu=$(( link - S4 - 32 - 8 - OUTER ))
+        fit_s4=$(( link - MTU - 32 - 8 - OUTER ))
+        (( fit_s4 > 0 )) || fit_s4=0
+        note "        a datagram of $(( MTU + S4 + 32 + 8 + 20 )) bytes over IPv4 does not fit ${link}"
+        note "        the budget reserves ${OUTER} bytes for the outer header and not the 20"
+        note "        measured here, so lower MTU to ${fit_mtu}, or S4 to ${fit_s4}"
     elif (( ping_rc != 0 )); then
         bad "link ${link}: no fragments, but full-size traffic did not get through"
     else

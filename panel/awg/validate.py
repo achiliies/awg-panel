@@ -1801,16 +1801,18 @@ def _padding_sizes(
     room = MTU_BUDGET - _mtu_or_default(mtu)
     s4_low, s4_high = band.s4
     # The MTU overrules the profile at both ends of the band, not only the top:
-    # DPI-resistant asks for 24 upwards and a 1420-byte tunnel leaves 20, and
-    # answering that with the profile's floor would overrun while answering it
-    # with nothing at all would put S4 below HEADER_NONCE - a set that cannot be
-    # combined with a header protection key. So it draws what fits.
+    # DPI-resistant asks for 24 upwards and a tunnel at the panel's ceiling
+    # leaves HEADER_NONCE, and answering that with the profile's floor would
+    # overrun while answering it with nothing at all would put S4 below
+    # HEADER_NONCE - a set that cannot be combined with a header protection key.
+    # So it draws what fits.
     #
     # Under HEADER_NONCE there is no honest answer left, and it is no padding
-    # rather than a value that would quietly black-hole every full-size packet.
+    # rather than a value that would quietly fragment every full-size packet.
     # It takes an MTU the panel will not save to get there - the largest it
-    # accepts is 1420, which leaves 20 - so a set drawn against a config in that
-    # state is one whose MTU is already an error, and that is what is shown.
+    # accepts is MTU_BUDGET - HEADER_NONCE, which leaves exactly HEADER_NONCE -
+    # so a set drawn against a config in that state is one whose MTU is already
+    # an error, and that is what is shown.
     s4 = rng.randint(min(s4_low, room), min(s4_high, room)) if room >= HEADER_NONCE else 0
 
     return {"S1": str(s1), "S2": str(s2), "S3": str(rng.randint(low, high)), "S4": str(s4)}
@@ -2451,8 +2453,9 @@ def data_padding_overrun(values: dict[str, str]) -> tuple[int, int] | None:
     headers and the authentication tag are accounted for, and S4 comes out of
     what is left after the MTU because the kernel pushes it onto the front of an
     already finished packet. Exceed it and nothing reports an error: small
-    requests keep working, full-size packets are silently dropped, and large
-    transfers hang half-finished.
+    requests keep working, full-size packets are fragmented rather than refused
+    - the outer datagram carries no DF - and large transfers stall wherever
+    those fragments do not survive.
 
     S4 is alone in this, which is worth stating because the arithmetic invites
     the opposite conclusion. ContentPaddingAddition also rides on every data
@@ -2476,14 +2479,15 @@ def _padding_overrun_message(s4: int, free: int, mtu: int) -> str:
     """One sentence for the overrun, naming the arithmetic and both ways out."""
     return (
         f"S4 = {s4} is added to every data packet, but an MTU of {mtu} leaves only {free} byte(s) "
-        f"for it on an ordinary 1500-byte path. Full-size packets would be dropped without an "
-        f"error and large transfers would hang. Lower S4 to {free}, or lower the MTU to "
-        f"{MTU_BUDGET - s4}."
+        f"for it on an ordinary 1500-byte path. Full-size packets would be fragmented rather than "
+        f"refused - the outer datagram carries no DF - and fragments are what a real path drops, "
+        f"so the tunnel would look slow rather than broken. Lower S4 to {free}, or lower the MTU "
+        f"to {MTU_BUDGET - s4}."
     )
 
 
 def _check_data_padding(values: dict[str, str], errors: dict[str, str], add) -> None:
-    """Refuse a combination that would black-hole full-size packets.
+    """Refuse a combination that would fragment every full-size packet.
 
     Reported against the MTU as well as S4, because the two are edited on
     different pages: an error left only on the field the operator cannot see is

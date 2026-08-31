@@ -96,14 +96,19 @@ def data_packet(mtu: int, s4: int, family: Family = IPV4) -> int:
     send.c:288-321 in order: S4 random bytes pushed onto the front of an
     already finished packet, the 16-byte message_data header, the plaintext,
     and the authentication tag. The plaintext is the packet the tunnel was
-    handed plus its padding, and both padding paths clamp that sum to the MTU -
-    calculate_skb_padding takes min(mtu, ALIGN(len, 16)) and
-    randomize_skb_padding takes min(addition, mtu - len) - so a full-size
-    packet is exactly MTU bytes of plaintext and gets no padding at all.
+    handed plus its padding, and encrypt_packet picks one of three paddings for
+    it (send.c:277-284), none of which can carry it past the MTU:
+    calculate_skb_padding takes min(mtu, ALIGN(len, 16)), randomize_skb_padding
+    takes min(addition, mtu - len), and the RandomTrailers path takes
+    get_random_u32_below(udp_window - len - MESSAGE_MINIMUM_LENGTH - S4). Only
+    the first two are clamped against the MTU by name. The third is clamped
+    against udp_window, which is itself S4 + MESSAGE_MINIMUM_LENGTH + MTU, so
+    it arrives in the same place by a different route - and a full-size packet
+    is exactly MTU bytes of plaintext on all three, with no padding at all.
 
-    That clamp is why ContentPaddingAddition is absent from this sum. It rides
-    on every data packet as S4 does, and there the resemblance stops: it goes
-    inside the encrypted payload where the MTU bounds it, S4 goes in front
+    Those clamps are why ContentPaddingAddition is absent from this sum. It
+    rides on every data packet as S4 does, and there the resemblance stops: it
+    goes inside the encrypted payload where the MTU bounds it, S4 goes in front
     where nothing does.
     """
     return s4 + MESSAGE_DATA_HEADER + mtu + AUTHTAG + UDP_HEADER + family.header
@@ -134,13 +139,14 @@ def handshake_packet(
 ) -> int:
     """The largest datagram one handshake-time packet becomes.
 
-    Everything sent outside the data path goes through
+    Almost everything sent outside the data path goes through
     wg_socket_send_buffer_to_peer (socket.c:190): the initiation (send.c:87),
     the response (send.c:158), each of the Jc junk packets (send.c:75) and each
     of the I1-I5 imitation packets (send.c:56). All four get the same treatment
     - `padding` random bytes in front, then a trailer of
     get_random_u32_below(udp_window - size) bytes appended when RandomTrailers
-    is set (peer.h:98-107).
+    is set (peer.h:98-107). The cookie reply is the one exception, and `window`
+    is where it differs - see handshake_burst.
 
     So with the switch on, every one of those packets is drawn uniformly across
     the whole window: a 20-byte STUN decoy and a 148-byte initiation both
@@ -166,13 +172,23 @@ def handshake_burst(
     is the rendered byte length of each I-packet. The burst is up to Jc junk
     packets, up to five decoys and the initiation, sent back to back, so this
     is the size of its worst member rather than its total.
+
+    The cookie reply is the one member that does not draw against the peer's
+    window. It leaves through wg_socket_send_buffer_as_reply_to_skb
+    (socket.c:223), which is answering a datagram rather than talking to a peer
+    it has looked up, and passes NULL where the others pass one - so
+    wg_peer_skb_random_trailer takes its DEFAULT_UDP_WINDOW branch (peer.h:101)
+    and the reply is drawn inside 500 bytes however wide the session's window
+    has opened. It is never the largest packet here; it is modelled correctly
+    anyway, because a model that is conservative by accident is one nobody can
+    tell from a model that is right.
     """
     trailers = bool(profile.get("RandomTrailers"))
     window = udp_window(profile["MTU"], profile["S4"])
     sizes = [
         handshake_packet(HANDSHAKE_INITIATION, profile["S1"], window, trailers, family),
         handshake_packet(HANDSHAKE_RESPONSE, profile["S2"], window, trailers, family),
-        handshake_packet(HANDSHAKE_COOKIE, profile["S3"], window, trailers, family),
+        handshake_packet(HANDSHAKE_COOKIE, profile["S3"], DEFAULT_UDP_WINDOW, trailers, family),
         handshake_packet(profile["Jmax"], 0, window, trailers, family),
     ]
     sizes += [handshake_packet(length, 0, window, trailers, family) for length in imitation]

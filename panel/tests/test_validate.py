@@ -505,19 +505,26 @@ def test_randomize_shares_nothing_between_servers():
 
 def test_randomize_keeps_s4_inside_the_mtu_headroom():
     """S4 rides on every data packet, so a draw that does not fit silently
-    black-holes full-size packets rather than failing loudly."""
+    fragments full-size packets rather than failing loudly."""
     for mtu in MTUS:
         for _ in range(ROUNDS):
             s4 = int(validate.randomize(mtu=mtu)["S4"])
             assert s4 <= validate.MTU_BUDGET - mtu, f"S4 {s4} does not fit an MTU of {mtu}"
 
 
-@pytest.mark.parametrize("mtu", ["1420", 1420])
+@pytest.mark.parametrize("mtu", [str(validate.PARAMS["MTU"].max), validate.PARAMS["MTU"].max])
 def test_randomize_takes_the_mtu_as_text_or_a_number(mtu):
     """Config values arrive as text about as often as they arrive as integers,
-    and the string form used to reach the arithmetic and raise TypeError."""
+    and the string form used to reach the arithmetic and raise TypeError.
+
+    Taken at the panel's ceiling and asserted exactly, because that is the one
+    MTU with a single answer: it leaves HEADER_NONCE, and every profile's band
+    is clamped onto that. An upper bound here would be met by the default-MTU
+    fallback as well - and a string thrown away rather than raised on is the
+    other half of what this is watching for, not something apart from it."""
+    room = validate.MTU_BUDGET - validate.PARAMS["MTU"].max
     for _ in range(ROUNDS):
-        assert int(validate.randomize(mtu=mtu)["S4"]) <= 20
+        assert int(validate.randomize(mtu=mtu)["S4"]) == room
 
 
 @pytest.mark.parametrize("mtu", [None, 0, "", "not a number"])

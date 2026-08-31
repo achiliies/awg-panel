@@ -267,11 +267,16 @@ raw=$(awk '/whiptail /{ blk=""; ln=NR }
 
 # lib/obfs.sh is used by tests/obfs.sh with nothing else sourced, so it has to
 # carry its own i18n or it breaks that harness rather than this one.
-out=$(bash -c ". '$REPO/lib/obfs.sh'; LANG_CHOICE=ru; gen_obfuscation 1420; printf '%s' \"\$GEN_DESC\"" 2>&1)
+#
+# Drawn at the default MTU and not at the old 1420: at the current budget 1420
+# leaves no room for S4 at all, so the profile drawn there carries no padding
+# and no header protection key, and the sentence under test would be describing
+# a config install.sh would never write.
+out=$(bash -c ". '$REPO/lib/obfs.sh'; LANG_CHOICE=ru; gen_obfuscation 1400; printf '%s' \"\$GEN_DESC\"" 2>&1)
 [[ "$out" == *[А-Яа-яЁё]* ]] \
     && ok "lib/obfs.sh describes a profile in Russian on its own" \
     || bad "lib/obfs.sh gave no Russian description" "$out"
-out=$(bash -c ". '$REPO/lib/obfs.sh'; LANG_CHOICE=en; gen_obfuscation 1420; printf '%s' \"\$GEN_DESC\"" 2>&1)
+out=$(bash -c ". '$REPO/lib/obfs.sh'; LANG_CHOICE=en; gen_obfuscation 1400; printf '%s' \"\$GEN_DESC\"" 2>&1)
 [[ "$out" != *[А-Яа-яЁё]* && -n "$out" ]] \
     && ok "and in English when that is what was asked for" \
     || bad "lib/obfs.sh leaked Russian into an English run" "$out"

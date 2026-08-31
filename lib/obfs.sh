@@ -375,7 +375,7 @@ gen_sizes() {
     S3=$(rand_int 24 320)
     room=$(( OBFS_MTU_BUDGET - mtu ))
     # No room left means no padding, rather than a value that would quietly
-    # black-hole every full-size packet. The floor is OBFS_HEADER_NONCE rather
+    # fragment every full-size packet. The floor is OBFS_HEADER_NONCE rather
     # than something smaller so that turning header protection on afterwards
     # never has to redraw these.
     if (( room >= OBFS_HEADER_NONCE )); then

@@ -160,6 +160,21 @@ def test_a_combination_that_fragments_is_refused():
         f"the validator accepted a config that fragments: {wire.explain(drawn, wire.ETHERNET)}"
     )
 
+    # And the other side of that line, which is the half the name is about. One
+    # more byte of S4 is a datagram the layout says will not cross, and it has
+    # to come back as an error rather than be saved - on both fields, because
+    # the MTU is on the Server page and S4 is on Obfuscation, and an error only
+    # on the one the operator cannot see is one they cannot act on.
+    over = {**drawn, "S4": s4 + 1}
+    assert wire.headroom(over, wire.ETHERNET) < 0, (
+        "the pair meant to overrun does not, so the refusal below proves nothing"
+    )
+    refused = validate.validate_params({"MTU": str(mtu), "S4": str(s4 + 1)}, features=ALL_FEATURES)
+    assert "MTU" in refused and "S4" in refused, (
+        f"the layout says this fragments and the validator saved it: "
+        f"{wire.explain(over, wire.ETHERNET)}"
+    )
+
 
 def test_the_budget_the_validator_enforces_matches_the_packet():
     """MTU_BUDGET is the largest MTU that leaves room for no S4 at all, so it is
@@ -175,7 +190,14 @@ def test_the_budget_the_validator_enforces_matches_the_packet():
         "Jmax": 64,
         "RandomTrailers": 1,
     }
-    assert wire.headroom(drawn, wire.ETHERNET) >= 0, wire.explain(drawn, wire.ETHERNET)
+    assert wire.headroom(drawn, wire.ETHERNET) == 0, wire.explain(drawn, wire.ETHERNET)
+
+    # Exactly zero, and one byte more is negative. `>= 0` alone would hold for
+    # any budget at or under the real one, so a constant that had drifted
+    # downwards would leave every test here green while every profile quietly
+    # gave up padding it was entitled to. The budget is a maximum, and only the
+    # pair of assertions says so.
+    assert wire.headroom({**drawn, "MTU": validate.MTU_BUDGET + 1}, wire.ETHERNET) < 0
 
 
 # ------------------------------------------- what the handshake burst costs
