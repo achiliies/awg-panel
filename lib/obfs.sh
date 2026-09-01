@@ -225,6 +225,16 @@ obfs_trailer_footgun() {
 # now checked rather than asserted.
 OBFS_MTU_BUDGET=1420
 
+# The tunnel MTU everything here assumes when a caller names none. Chosen so
+# the budget leaves more room than the S4 band can spend: the ceiling that
+# binds is then the band's own 40 rather than whatever is left over, which
+# puts the largest data packet at 1492 - the PPPoE link most home clients sit
+# behind - instead of at whatever the budget happens to allow. install.sh
+# carries the same number as a literal, because that is the one the panel's
+# test_clientsenv.py reads back to keep the installer, clients.env and the
+# panel's own default from drifting apart.
+OBFS_DEFAULT_MTU=1372
+
 # The floor under S1-S4. The key's nonce is read from the first 12 bytes of the
 # prefix on each packet, so a padding size below this is one the kernel refuses
 # the whole device configuration over: `awg setconf` returns EINVAL and
@@ -364,7 +374,7 @@ gen_junk() {
 # keep honest, since it is added to every data packet and comes out of the
 # usable MTU. Takes the tunnel MTU; sets S1-S4.
 gen_sizes() {
-    local mtu=${1:-1400} room
+    local mtu=${1:-$OBFS_DEFAULT_MTU} room
     S1=$(rand_int 24 320)
     S2=$(rand_int 24 320)
     # S1 + 56 == S2 puts both handshake packets on the same on-wire length,
@@ -757,7 +767,7 @@ gen_advanced() {
 
 gen_obfuscation() {
     gen_junk
-    gen_sizes "${1:-1400}"
+    gen_sizes "${1:-$OBFS_DEFAULT_MTU}"
     gen_header_ranges
     gen_imitation
     gen_advanced

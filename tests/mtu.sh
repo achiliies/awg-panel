@@ -196,7 +196,7 @@ if [[ -r "$LIVE" ]]; then
 else
     # No install on this box, so draw one the way install.sh would. Same
     # generator, so a profile that fragments here is one it would have shipped.
-    MTU=${AWG_MTU:-1400}
+    MTU=${AWG_MTU:-$OBFS_DEFAULT_MTU}
     # shellcheck source=lib/obfs.sh
     . "$REPO/lib/obfs.sh"
     gen_obfuscation "$MTU"

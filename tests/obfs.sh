@@ -46,7 +46,7 @@ for (( round = 0; round < ROUNDS; round++ )); do
     # nonce, so a literal here would keep sweeping a value the panel had stopped
     # accepting - and would stop covering the one that replaced it.
     case $(( round % 4 )) in
-        0) mtu=1400 ;;
+        0) mtu=$OBFS_DEFAULT_MTU ;;
         1) mtu=1280 ;;
         2) mtu=$(( OBFS_MTU_BUDGET - OBFS_HEADER_NONCE )) ;;
         *) mtu=1360 ;;
@@ -165,7 +165,7 @@ fi
 # exits 1 in the middle of the step with nothing printed. So the status is
 # asserted here the way install.sh consumes it, in a shell that has -e set.
 echo "  exit status under set -e"
-if bash -c "set -euo pipefail; . '$REPO/lib/obfs.sh'; gen_obfuscation 1400" >/dev/null 2>&1; then
+if bash -c "set -euo pipefail; . '$REPO/lib/obfs.sh'; gen_obfuscation $OBFS_DEFAULT_MTU" >/dev/null 2>&1; then
     echo "  ok    gen_obfuscation returns 0, so install.sh gets past the step"
 else
     echo "  FAIL  gen_obfuscation returned non-zero; install.sh would exit here"

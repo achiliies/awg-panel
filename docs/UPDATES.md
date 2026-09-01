@@ -247,6 +247,19 @@ lowering it on **Server** means handing those configs out again. Nothing is
 down while you wait — a fragmenting tunnel is slow, not broken — and clients
 keep running on the old number until they are reissued.
 
+**The recommended MTU is now 1372**, and an upgrade leaves yours where it is —
+this one is a better default rather than a fault, so nothing warns about it.
+1400 was chosen against a 1500-byte link and fits one exactly: the largest data
+packet comes to 1500 bytes with nothing to spare, which is eight bytes over the
+1492 of a PPPoE line, and a client on DSL or VDSL has that packet fragmented on
+every full-size transfer. 1372 is the number at which `S4` reaches its own
+ceiling of 40 before the budget's, so the largest packet is 1492 whatever the
+profile draws, and it crosses those links whole. It costs about 1.5% of
+throughput, and it buys `S4` its full 12–40 band back — at 1400 the budget left
+room for only 12–20, and the *DPI-resistant* profile had no room to vary at
+all. Moving it costs a client reissue like any other MTU change, so it is worth
+doing when you next hand configs out rather than on its own.
+
 On top of it, **a full backup is taken before anything is replaced**. It goes to
 `/var/lib/awg-panel/backups/awg-backup-<date>-<time>.tar.gz`, it is the same
 archive **Settings → Backup** produces, and it is written through the panel's own

@@ -254,7 +254,7 @@ S_RANGE = (24, 320)
 # for the layout and tests/mtu.sh for the same number measured on a link.
 S4_RANGE = (HEADER_NONCE, 40)
 MTU_BUDGET = 1420
-DEFAULT_MTU = 1400
+DEFAULT_MTU = 1372
 
 # What the kernel pads a data packet to when nothing else is configured: the
 # plaintext is rounded up to a multiple of 16 before encryption, so an observer
@@ -1088,10 +1088,13 @@ _SPECS: list[ParamSpec] = [
         help_short="Largest packet the tunnel carries. Too high and big packets fragment.",
         help_long=(
             "The tunnel wraps every packet in headers of its own, so the MTU inside has to be "
-            "smaller than the path outside. 1400 leaves room for the 80 bytes of overhead on a "
+            "smaller than the path outside. 1372 leaves room for the 80 bytes of overhead on a "
             "1500-byte path - 8 of UDP, 32 of transport header and tag, and 40 for an outer IP "
-            "header that may be IPv6 - plus the S4 junk prefix. Set it too high and you get the "
-            "classic half-broken tunnel: small requests work, large downloads and some websites "
+            "header that may be IPv6 - and for the whole 40 bytes S4 draws on top of it. That "
+            "comes to 1492, which is the DSL and VDSL link most home clients sit behind, so a "
+            "full-size packet crosses one of those whole instead of in fragments. Set it too "
+            "high and you get the classic half-broken tunnel: small requests work, large "
+            "downloads and some websites "
             "hang forever, because full-size packets are being fragmented and the fragments are "
             "what a real path drops. Below 1280 breaks IPv6. Raising S4 means lowering this by "
             "the same amount. Clients should use the same number, and the panel writes it into "
@@ -1104,8 +1107,8 @@ _SPECS: list[ParamSpec] = [
         # equal to the budget would be arithmetically fine and would quietly
         # take both S4 and header protection away from anyone who used it.
         max=MTU_BUDGET - HEADER_NONCE,
-        recommended="1400",
-        default="1400",
+        recommended="1372",
+        default="1372",
     ),
     ParamSpec(
         key="DNS",

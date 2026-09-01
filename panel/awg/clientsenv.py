@@ -34,9 +34,11 @@ from .paths import atomic_write, env_file
 # whose clients.env was deleted or truncated, and what they have to be is the
 # value install.sh would have written into the line that is missing - a fallback
 # that quietly differs from it hands the next client something no server was
-# ever set up with. CLIENT_DNS said 1.1.1.1 and CLIENT_MTU said 1420 against an
-# installer writing 8.8.8.8 and 1400, and the comment here asserted they agreed,
-# which is how it went unnoticed.
+# ever set up with. Once, CLIENT_DNS said 1.1.1.1 and CLIENT_MTU said 1420 while
+# the installer was writing 8.8.8.8 and 1400, and the comment here asserted they
+# agreed, which is how it went unnoticed. test_clientsenv.py reads the installer
+# back now and pins validate.DEFAULT_MTU to the same number, so all three move
+# together or the suite says which one did not.
 #
 # CLIENT_ALLOWED_IPS is the one that cannot simply mirror it: the installer adds
 # ::/0 when the tunnel carries IPv6, and nothing readable from this file says
@@ -51,7 +53,7 @@ DEFAULTS: dict[str, str] = {
     "ENDPOINT_HOST": "",
     "ENDPOINT_PORT": "",
     "CLIENT_DNS": "8.8.8.8, 8.8.4.4",
-    "CLIENT_MTU": "1400",
+    "CLIENT_MTU": "1372",
     "CLIENT_ALLOWED_IPS": "0.0.0.0/0",
     "SUBNET_CIDR": "",
     "SUBNET_BASE": "",

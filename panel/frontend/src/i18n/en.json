@@ -531,7 +531,7 @@
 
     "listenPortHint": "The UDP port clients connect to. Changing it means every client config has to be updated.",
     "addressHint": "The server's own address inside the tunnel, with the subnet mask.",
-    "mtuHint": "Largest packet the tunnel carries. Lower it if connections stall on some networks; 1420 and 1280 are the usual answers.",
+    "mtuHint": "Largest packet the tunnel carries. Lower it if connections stall on some networks; 1372 and 1280 are the usual answers.",
     "dnsHint": "Name servers clients use while the tunnel is up. Empty means the device keeps its own.",
     "endpointHint": "The address clients dial. Leave the host empty to detect the public IP, and the port empty to use the listening port.",
     "keepaliveHint": "Seconds between keepalive packets. It holds NAT and firewall entries open so the server can reach the client first.",

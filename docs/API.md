@@ -593,7 +593,7 @@ single download. Contains private keys.
   "subnet6Cidr": "fd7a:1e5f:22::/64",
   "subnet6Mode": "native",
   "listenPort": 41820,
-  "mtu": 1400,
+  "mtu": 1372,
   "publicKey": "Xq3...=",
   "dns": "8.8.8.8, 8.8.4.4",
   "endpointHost": "203.0.113.7",

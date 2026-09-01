@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from awg import clientsenv
+from awg import clientsenv, validate
 from awg.errors import ValidationError
 
 # What install.sh writes, aligned trailing comments included - as it wrote it
@@ -49,7 +49,7 @@ def test_missing_file_gives_the_defaults_a_client_config_is_built_from() -> None
     """A deleted clients.env must not change what a client config comes out as."""
     assert clientsenv.read_env() == clientsenv.DEFAULTS
     assert clientsenv.DEFAULTS["CLIENT_DNS"] == "8.8.8.8, 8.8.4.4"
-    assert clientsenv.DEFAULTS["CLIENT_MTU"] == "1400"
+    assert clientsenv.DEFAULTS["CLIENT_MTU"] == "1372"
     # Blank, not a network: the tunnel subnet is the server's own Address and
     # these two only mirror it, so a default here would override an older
     # file's customised SUBNET_BASE and move the allocator.
@@ -85,6 +85,12 @@ def test_the_defaults_are_the_values_install_sh_writes() -> None:
 
     assert clientsenv.DEFAULTS["CLIENT_DNS"] == assigned("CLIENT_DNS_DEFAULT")
     assert clientsenv.DEFAULTS["CLIENT_MTU"] == assigned("MTU")
+    # And the third copy of that number, which the two above do not reach.
+    # validate.DEFAULT_MTU is what the panel offers on the Server page and
+    # what S4 is drawn against when a config carries no MTU of its own, so a
+    # default that moved in the installer and not here would hand every new
+    # server a padding set drawn for an MTU it is not running.
+    assert clientsenv.DEFAULTS["CLIENT_MTU"] == str(validate.DEFAULT_MTU)
     assert clientsenv.DEFAULTS["KEEPALIVE"] == "25"
     assert f'KEEPALIVE="{clientsenv.DEFAULTS["KEEPALIVE"]}"' in text
 

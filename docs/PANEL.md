@@ -748,7 +748,7 @@ The network group is not part of this and does have fixed values:
 |---|---|---|
 | `ListenPort` | network | a random port in 20000–59999 |
 | `Address` | network | `10.13.0.1/20` |
-| `MTU` | network | 1400 |
+| `MTU` | network | 1372 |
 | `DNS` | network | `8.8.8.8, 8.8.4.4`, plus the two IPv6 resolvers where the tunnel carries IPv6 out |
 | `AllowedIPs` | network | `0.0.0.0/0, ::/0`, and `0.0.0.0/0` alone only where IPv6 is off |
 | `PersistentKeepalive` | network | 25 |
@@ -985,9 +985,13 @@ cost anything measurable.
   in steady state.
 - **`S4` at 12–40, capped at `1420 − MTU`.** This is the only one that touches
   data packets, so it is the only one that could cost throughput. At the default
-  MTU of 1400 the cap is 20 bytes, which is the headroom an ordinary 1500-byte
-  path leaves after the outer IP and UDP headers, the transport header and the
-  authentication tag. The outer IP header is counted at 40 and not 20: the
+  MTU of 1372 the budget leaves 48 bytes, which is more than the band draws — so
+  the profile's own ceiling binds first and the largest datagram is 1492 rather
+  than whatever the budget happens to allow. That is the point of the number:
+  1492 is the PPPoE link most home clients sit behind. The headroom itself is
+  what an ordinary 1500-byte path leaves after the outer IP and UDP headers, the
+  transport header and the authentication tag, and the outer IP header is
+  counted at 40 and not 20: the
   endpoint's address family is not the operator's to choose, and the module
   reserves for the larger one in exactly the same place. Exceed it and full-size
   packets are fragmented rather than refused, because the outer datagram carries

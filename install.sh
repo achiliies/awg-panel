@@ -12,7 +12,7 @@
 #   --iface NAME    tunnel name          (default: awg0)
 #   --subnet CIDR   tunnel network       (default: 10.13.0.0/20)
 #   --client NAME   first client name    (default: client1)
-#   --mtu N         tunnel MTU           (default: 1400)
+#   --mtu N         tunnel MTU           (default: 1372)
 #   --lang CODE     en | ru              (default: asked, then en)
 #   --panel         accepted and ignored; the panel is always installed
 #   --panel-port N  panel HTTP port      (default: 2097)
@@ -62,7 +62,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 IFACE=awg0
 SUBNET=10.13.0.0/20
-MTU=1400
+MTU=1372
 PORT=""
 ENDPOINT=""
 CLIENT=client1
@@ -214,7 +214,7 @@ Options:
                   ignored on one that already has it - the prefix is in
                   every config already issued, and only --fresh renumbers.
   --client NAME   first client name    (default: client1)
-  --mtu N         tunnel MTU           (default: 1400)
+  --mtu N         tunnel MTU           (default: 1372)
   --lang CODE     en | ru              (default: asked once, then en)
                   What this installer and the panel installer print. It is
                   not a setting on the server: awg-menu and the panel's own
