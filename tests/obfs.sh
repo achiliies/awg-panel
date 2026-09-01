@@ -75,10 +75,11 @@ for (( round = 0; round < ROUNDS; round++ )); do
     } >> "$WORK/profiles.tsv"
 done
 
-# The two constants go with it. They are what the shell drew every profile
-# above against, and obfs_check.py is the only place that can hold them up to
-# both the packet layout and the panel's own copy of the same numbers.
+# The constants go with it. They are what the shell drew every profile above
+# against, and obfs_check.py is the only place that can hold them up to both the
+# packet layout and the panel's own copy of the same numbers.
 OBFS_MTU_BUDGET="$OBFS_MTU_BUDGET" OBFS_HEADER_NONCE="$OBFS_HEADER_NONCE" \
+    OBFS_DEFAULT_MTU="$OBFS_DEFAULT_MTU" \
     PYTHONPATH="$REPO/panel" "$PY" "$REPO/tests/obfs_check.py" "$WORK/profiles.tsv"
 RC=$?
 

@@ -67,6 +67,17 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
+# Sourced here rather than in the branch below that draws a profile, because
+# the constants come with it and both branches read them - the fallback wants
+# OBFS_DEFAULT_MTU, and the diagnosis in measure() wants OBFS_HEADER_NONCE on a
+# box that had a config to read and never took the branch. `set -u` is on, so a
+# constant reached before its library is an exit 1, which is the status that
+# means the profile fragments: the wrong answer, from a run that measured
+# nothing. Nothing in it runs at source time, and tests/obfs.sh already asserts
+# that sourcing it under `set -euo pipefail` is quiet.
+# shellcheck source=lib/obfs.sh
+. "$REPO/lib/obfs.sh"
+
 NS_S="awg-mtu-server"
 NS_C="awg-mtu-client"
 DEV_S="awgmtus"
@@ -197,8 +208,6 @@ else
     # No install on this box, so draw one the way install.sh would. Same
     # generator, so a profile that fragments here is one it would have shipped.
     MTU=${AWG_MTU:-$OBFS_DEFAULT_MTU}
-    # shellcheck source=lib/obfs.sh
-    . "$REPO/lib/obfs.sh"
     gen_obfuscation "$MTU"
     OBFS=$(printf 'Jc = %s\nJmin = %s\nJmax = %s\nS1 = %s\nS2 = %s\nS3 = %s\nS4 = %s\n' \
                   "$JC" "$JMIN" "$JMAX" "$S1" "$S2" "$S3" "$S4"
@@ -409,6 +418,14 @@ measure() {
 
     after_c=$(frags "$NS_C" "$family")
     after_s=$(frags "$NS_S" "$family")
+    # The same guard as the one above, and it has to be said twice: a counter
+    # readable before the traffic and not after it would leave `made` negative,
+    # which reads as no fragments and prints a pass. Half a subtraction is not
+    # a measurement either.
+    if [[ -z "$after_c" || -z "$after_s" ]]; then
+        bad "${where}: the fragment counters stopped being readable mid-run"
+        return 1
+    fi
     reasm_c=$(reasms "$NS_C" "$family")
     reasm_s=$(reasms "$NS_S" "$family")
     # Through names rather than the command substitutions themselves: an empty
@@ -436,10 +453,20 @@ measure() {
         fi
         fit_mtu=$(( link - S4 - 32 - 8 - HDR6 ))
         fit_s4=$(( link - MTU - 32 - 8 - HDR6 ))
-        (( fit_s4 > 0 )) || fit_s4=0
         note "        a datagram of $(( MTU + S4 + 32 + 8 + hdr )) bytes over IPv${family} does"
         note "        not fit ${link}. The budget reserves ${HDR6} for the outer header whatever"
-        note "        the endpoint resolves to, so lower MTU to ${fit_mtu}, or S4 to ${fit_s4}"
+        # Named only where it is a number worth setting, which is the same rule
+        # the panel's own advisory follows: under OBFS_HEADER_NONCE the padding
+        # can no longer carry a header protection nonce, so an S4 there is a
+        # config no key can be added to and not a fix. Below zero there is no S4
+        # at all - the MTU is over the link on its own.
+        if (( fit_s4 >= OBFS_HEADER_NONCE )); then
+            note "        the endpoint resolves to, so lower MTU to ${fit_mtu}, or S4 to ${fit_s4}"
+        else
+            note "        the endpoint resolves to, so lower MTU to ${fit_mtu}. No S4 is a way"
+            note "        out here: ${link} leaves ${fit_s4} for it, under the"
+            note "        ${OBFS_HEADER_NONCE} a header protection nonce is read from"
+        fi
     elif (( ping_c != 0 || ping_s != 0 )); then
         bad "${where}: no fragments, but full-size traffic did not get through"
     else

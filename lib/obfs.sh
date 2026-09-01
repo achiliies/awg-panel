@@ -48,12 +48,17 @@
 #
 # Where a header protection key was drawn, that is a peer on exactly 3.0:
 # anything older already fails on the key beside it, and fails the same silent
-# way. Where one was not - an --mtu of 1409 or more leaves S4 no room for the
+# way. Where one was not - an MTU of 1409 or more leaves S4 no room for the
 # nonce, and no key is written at all - there is nothing else in the config that
 # fails outright, because a peer too old for the padding or the timers ignores
 # those lines and stays up. On that server this switch is the only hard stop,
 # and it turns away every client below 3.1 rather than one release of them.
-# That is the cost, and --mtu is where it is paid.
+# That is the cost, and the MTU is where it is paid.
+#
+# install.sh will not take an --mtu that high any more, so a fresh install
+# cannot arrive there. gen_obfuscation is handed the MTU off a live awg0.conf
+# as well, and a server upgraded from a release that did take one still carries
+# it - which is the server this paragraph is about.
 #
 # What was left either way was the strongest setting on the page waiting for an
 # operator to go and find a button, which is the argument that emptied the 3.0

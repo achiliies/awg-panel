@@ -47,7 +47,12 @@ import wire  # noqa: E402  (needs the path above first)
 # stays inside the second the rest of the suite budgets per test.
 ROUNDS = 200
 
-PROFILE_KEYS = tuple(validate.ADVANCED_PROFILES)
+# The obfuscation bands, which is the dict randomize() looks the name up in.
+# Not ADVANCED_PROFILES, whose four keys are the same four strings: the two are
+# separate dicts and randomize() falls back to standard on a name it does not
+# know, so reading the wrong one is a sweep that measures standard four times
+# and says nothing about it.
+PROFILE_KEYS = tuple(validate.PROFILES)
 
 # What a client is handed if nobody touches anything: the installer's default
 # and the panel's agree, and both are what the ParamSpec offers.
@@ -80,6 +85,23 @@ def profile_of(values: dict[str, str], mtu: int) -> dict[str, int]:
     return out
 
 
+def draw(mtu: int, profile: str = validate.DEFAULT_PROFILE) -> dict[str, int]:
+    """One server's whole draw, measured the way that server would be.
+
+    Both halves of it, because RandomTrailers is what decides how large a
+    handshake-time packet gets and it is not in randomize()'s half - it comes
+    from randomize_advanced(), which is the other button and always sets it.
+    Reading only the first leaves the flag off in every round, and a burst
+    measured with the trailer off is a burst four hundred bytes clear of the
+    bound it is supposed to be pressed against.
+    """
+    values = {
+        **validate.randomize(mtu=mtu, profile=profile),
+        **validate.randomize_advanced(profile=profile),
+    }
+    return profile_of(values, mtu)
+
+
 # ------------------------------------------------------- the drawn profile
 
 
@@ -89,7 +111,7 @@ def test_every_draw_fits_a_1500_byte_link(mtu):
     everything. Both families: install.sh takes a hostname for --endpoint and a
     client resolving it to an AAAA pays twenty bytes the config never mentions."""
     for _ in range(ROUNDS):
-        drawn = profile_of(validate.randomize(mtu=mtu), mtu)
+        drawn = draw(mtu)
         spare = wire.headroom(drawn, wire.ETHERNET)
         assert spare >= 0, wire.explain(drawn, wire.ETHERNET)
 
@@ -101,7 +123,7 @@ def test_every_profile_fits_a_1500_byte_link(profile):
     thorough one, and an operator has no way to tell that they did."""
     for mtu in MTUS:
         for _ in range(ROUNDS):
-            drawn = profile_of(validate.randomize(mtu=mtu, profile=profile), mtu)
+            drawn = draw(mtu, profile)
             assert wire.headroom(drawn, wire.ETHERNET) >= 0, (
                 f"{profile}: {wire.explain(drawn, wire.ETHERNET)}"
             )
@@ -113,7 +135,7 @@ def test_the_default_a_new_server_gets_fits():
     combination that ships, and a failure here is every install rather than a
     corner of the band."""
     for _ in range(ROUNDS):
-        drawn = profile_of(validate.randomize(mtu=DEFAULT_MTU), DEFAULT_MTU)
+        drawn = draw(DEFAULT_MTU)
         assert wire.headroom(drawn, wire.ETHERNET) >= 0, wire.explain(drawn, wire.ETHERNET)
 
 
@@ -215,8 +237,8 @@ def test_the_handshake_burst_stays_inside_the_data_packet():
     different pages: the window comes from the MTU and S4, the burst from S1-S3
     and Jmax, and nothing in the panel shows them together."""
     for _ in range(ROUNDS):
-        values = validate.randomize(mtu=DEFAULT_MTU)
-        drawn = profile_of(values, DEFAULT_MTU)
+        drawn = draw(DEFAULT_MTU)
+        assert drawn["RandomTrailers"], "the switch this test is about was not drawn"
         assert wire.handshake_burst(drawn) <= wire.data_packet(DEFAULT_MTU, drawn["S4"]), (
             "a handshake-time packet is larger than a full data packet: "
             f"S1={drawn['S1']} S2={drawn['S2']} S3={drawn['S3']} Jmax={drawn['Jmax']}"
@@ -253,10 +275,7 @@ def test_the_margin_under_a_1500_byte_link():
     VDSL, it is 1492, and a client behind one has no way to tell the server so.
     A negative number here is not a failing test; it is the reason a config that
     passes everything above can still stall on a real connection."""
-    tightest = min(
-        wire.headroom(profile_of(validate.randomize(mtu=DEFAULT_MTU), DEFAULT_MTU), wire.PPPOE)
-        for _ in range(ROUNDS)
-    )
+    tightest = min(wire.headroom(draw(DEFAULT_MTU), wire.PPPOE) for _ in range(ROUNDS))
     print(f"\n  MTU {DEFAULT_MTU}: {tightest} byte(s) to spare on {wire.PPPOE.name}")
 
     # The assertion is on the model rather than on the margin, because the

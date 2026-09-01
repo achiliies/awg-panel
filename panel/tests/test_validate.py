@@ -10,6 +10,8 @@ better off than one who got no error at all.
 Self-contained: nothing here touches the filesystem, so no fixtures are needed.
 """
 
+import re
+
 import pytest
 
 from awg import validate
@@ -408,14 +410,17 @@ def test_padding_switched_off_never_overruns():
 def test_every_way_out_of_an_overrun_is_one_the_panel_would_save():
     """An advisory naming a number the save then refuses is not advice.
 
-    Both halves of the sentence used to be reachable in a state where they were
-    not: install.sh takes --mtu up to 9000, a server built above the budget has
-    S4 off already because there was never room to draw one, and what it read on
-    its status page was to lower S4 to a negative number and the MTU to the
-    whole budget - twelve past the ceiling the Server page enforces.
+    Every shape of the sentence used to be reachable in a state where it was
+    not one. An installer that took --mtu up to 9000 built servers above the
+    budget with S4 off already, and their status page said to lower S4 to a
+    negative number. Below that, an MTU between the ceiling and the budget -
+    which is what every server upgraded from a release before this one still
+    carries - was told to lower S4 to something under HEADER_NONCE, refused on
+    the spot by the header protection key beside it. And an S4 typed large
+    enough is told to lower the MTU under the 1280 IPv6 needs.
 
     So the assertion is on the numbers rather than the wording: whatever the
-    sentence offers has to be a value the panel would take."""
+    sentence names, applying it has to leave a config the panel would take."""
     ceiling = validate.PARAMS["MTU"].max
     over = {"MTU": "9000", "S4": "0"}
     assert validate.data_padding_overrun(over), "the case under test has to overrun"
@@ -428,12 +433,81 @@ def test_every_way_out_of_an_overrun_is_one_the_panel_would_save():
     assert check({"MTU": str(ceiling), "S4": "0"}) == {}
 
     # Under the budget both ways out exist, and both have to land somewhere
-    # savable: S4 at what the MTU leaves, or the MTU at what S4 leaves.
+    # savable on their own: S4 at what the MTU leaves, or the MTU at what S4
+    # leaves.
     tight = validate.warnings_for({"MTU": "1400", "S4": "120"})[0]
     free, lowered = validate.MTU_BUDGET - 1400, validate.MTU_BUDGET - 120
     assert f"Lower S4 to {free}, or lower the MTU to {lowered}." in tight, tight
     assert check({"MTU": "1400", "S4": str(free)}) == {}
     assert check({"MTU": str(lowered), "S4": "120"}) == {}
+
+
+#: Every "<field> to <number>" the overrun sentence names. Deliberately a reader
+#: of the finished string rather than a second copy of the arithmetic: the point
+#: is that what an operator can act on is actionable, and an assertion that
+#: recomputed the numbers would agree with the code whatever the sentence said.
+_ADVISED = re.compile(r"\b(MTU|S4) to (\d+)")
+
+
+@pytest.mark.parametrize(
+    "mtu,s4",
+    [
+        (1400, 80),  # both fields can fix it
+        (1400, 120),  # the same, further over
+        (1400, 141),  # the MTU that would fit this S4 is under the 1280 floor
+        (1400, 1280),  # S4 at the top of its own field
+        (1408, 13),  # one byte over at the ceiling
+        (1409, 12),  # the tightest MTU an upgrade can have left behind
+        (1415, 40),  # a full S4 band above the ceiling
+        (1420, 20),  # the old ceiling with the old draw on it
+        (1420, 1280),  # neither field is enough alone
+        (9000, 0),  # padding already off, MTU over on its own
+        (9000, 200),  # both, as far over as the fields go
+    ],
+)
+def test_the_overrun_sentence_only_ever_names_savable_numbers(mtu, s4):
+    """The general form of the test above, over every shape the sentence takes.
+
+    A header protection key is in the config because that is what makes half of
+    these refusals happen: the key reads its nonce off the first HEADER_NONCE
+    bytes of the padding, so an S4 the sentence names below that is one the save
+    rejects on the key rather than on the budget. A server with no key would
+    take some of them, and every server this panel generated has one.
+    """
+    values = {
+        "MTU": str(mtu),
+        "S4": str(s4),
+        "S1": "24",
+        "S2": "24",
+        "S3": "24",
+        "HeaderProtectionKey": SAMPLE_KEY,
+    }
+    assert validate.data_padding_overrun(values), "the case under test has to overrun"
+    sentence = validate.warnings_for(values)[0]
+
+    named = _ADVISED.findall(sentence)
+    assert named, f"the sentence names no way out at all: {sentence}"
+
+    # Applied together, because the last shape of the sentence names a pair -
+    # past the ceiling with an S4 too large for any MTU, neither field is enough
+    # alone and it says so. Where the two are alternatives, applying both is
+    # still a config that saves, so one pass covers every shape.
+    fixed = {**values, **{field: value for field, value in named}}
+    assert validate.data_padding_overrun(fixed) is None, (
+        f"the way out does not clear the overrun: {sentence!r} -> {fixed}"
+    )
+
+    # What is asserted is that no field the sentence named comes back with an
+    # error on the value the sentence put in it. Not that the whole config is
+    # clean: `values` can carry a fault the overrun has nothing to do with and
+    # no advice about the budget can fix. MTU 9000 with S4 = 0 is one - the
+    # padding is too short for the key beside it whatever the MTU does, and
+    # _check_header_protection is the check that says so, in its own message.
+    # Asserting a clean save would fail there, on a sentence that is right.
+    after = check(fixed)
+    offered = {field for field, _ in named}
+    refused = {field: after[field] for field in offered & set(after)}
+    assert not refused, f"{sentence!r} names a value its own field then refuses: {refused}"
 
 
 def test_padding_without_an_mtu_is_left_alone():

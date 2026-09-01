@@ -137,6 +137,12 @@ NODE_BASE = 0x800
 
 # Bytes, and only a default: the leaf qdiscs want a quantum no smaller than a
 # packet, and the tunnel's real MTU is what the caller should pass.
+#
+# Not validate.DEFAULT_MTU, which shares the name and is a different number and
+# a different job - that one is the MTU a new server is built with, drawn
+# against the per-packet budget. This is a floor under a tc quantum, so it is
+# only ever wrong by being too small, and one above the tunnel default is the
+# safe direction to be wrong in. It does not move when that one does.
 DEFAULT_MTU = 1400
 
 # What the root and default classes are rated at, and it is deliberately a

@@ -31,6 +31,11 @@ TAG = re.compile(r"<\s*(r|b)\s*([^>]*?)\s*>")
 
 failures: list[str] = []
 
+# lib/obfs.sh's own constants, passed in by tests/obfs.sh because a shell
+# variable is not something this can read for itself. Ordered as
+# check_the_budget() unpacks them.
+PINNED = ("OBFS_MTU_BUDGET", "OBFS_HEADER_NONCE", "OBFS_DEFAULT_MTU")
+
 # Bytes to spare on each link, per profile. Collected rather than asserted for
 # anything below a 1500-byte one: how much margin to leave under Ethernet is a
 # decision about who this software is for - a home client behind PPPoE has 1492
@@ -359,15 +364,20 @@ def check_the_budget() -> None:
 
     So the budget is pinned from both sides, the way test_wire_sizes.py pins the
     panel's: exactly zero headroom at the budget, and negative one byte past it.
-    Plus the one thing lib/obfs.sh cannot check about itself - that the number it
-    holds is the number awg.validate holds, since two implementations agreeing is
-    the whole reason either can be trusted.
+    Plus the thing lib/obfs.sh cannot check about itself - that the numbers it
+    holds are the numbers awg.validate holds, since two implementations agreeing
+    is the whole reason either can be trusted. Three of them: the budget, the
+    nonce floor, and the default MTU the generator draws against when a caller
+    names none.
     """
-    budget, nonce = os.environ.get("OBFS_MTU_BUDGET"), os.environ.get("OBFS_HEADER_NONCE")
-    if not budget or not nonce:
-        failures.append("the budget: lib/obfs.sh's constants were not passed to this check")
+    passed = {name: os.environ.get(name) for name in PINNED}
+    missing = [name for name, value in passed.items() if not value]
+    if missing:
+        failures.append(
+            f"the budget: lib/obfs.sh's constants were not passed to this check ({', '.join(missing)})"
+        )
         return
-    budget, nonce = int(budget), int(nonce)
+    budget, nonce, default = (int(passed[name]) for name in PINNED)
 
     if budget != validate.MTU_BUDGET:
         failures.append(
@@ -376,6 +386,16 @@ def check_the_budget() -> None:
     if nonce != validate.HEADER_NONCE:
         failures.append(
             f"the nonce floor: lib/obfs.sh says {nonce}, awg.validate says {validate.HEADER_NONCE}"
+        )
+
+    # The third one is not part of the packet layout and is checked anyway. It
+    # is the MTU gen_sizes draws against when a caller names none, and it is a
+    # fourth copy of a number install.sh, clientsenv.py and validate.py already
+    # hold - the first three are pinned to each other by test_clientsenv.py and
+    # this one was reachable from none of them.
+    if default != validate.DEFAULT_MTU:
+        failures.append(
+            f"the default MTU: lib/obfs.sh says {default}, awg.validate says {validate.DEFAULT_MTU}"
         )
 
     # S4 at 0 and the MTU at the budget is the budget's own definition: the

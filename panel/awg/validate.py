@@ -2497,35 +2497,80 @@ def data_padding_overrun(values: dict[str, str]) -> tuple[int, int] | None:
 def _padding_overrun_message(s4: int, free: int, mtu: int) -> str:
     """One sentence for the overrun, naming the arithmetic and the ways out.
 
-    Two shapes of it, because past the budget the MTU is over on its own:
-    switching the padding off entirely still leaves the datagram too large, so
-    there is no S4 to lower to and the sentence must not name one. That is not
-    a corner. install.sh takes --mtu up to 9000, a server built at one of those
-    has S4 off already because there was never room to draw one, and this is
-    what its status page says - so the advice it used to give was to lower S4
-    to a negative number.
+    The ways out are the hard part, because either field can be the one that
+    cannot move. An advisory naming a number the save then refuses is not
+    advice - it is the same dead end with an extra step, on a page that has
+    just told the operator something is wrong.
 
-    The MTU it offers is the ceiling the Server page enforces, which is the
-    budget less the nonce and not the budget itself. Those are the same number
-    only while S4 is at or above HEADER_NONCE; with the padding off they are
-    twelve apart, and it is the larger one that the save then refuses.
+    Lowering S4 stops being one at HEADER_NONCE rather than at zero. `free`
+    under it is the same statement as an MTU above MTU_BUDGET - HEADER_NONCE,
+    which is the ceiling the Server page enforces: anywhere in that band the
+    MTU has to come down whatever S4 does, and the S4 the sentence would name
+    is one no header protection key could be added to afterwards. Past the
+    budget it is worse - switching the padding off entirely still leaves the
+    datagram too large, so there is no S4 at all and the sentence must not
+    name one.
+
+    Lowering the MTU stops being one when S4 is large enough to push it under
+    the 1280 IPv6 needs, which takes an S4 past MTU_BUDGET minus that floor.
+    The generator draws 12 to 40 and this is a hand-typed value, but the field
+    accepts up to 1280 and the advice has to hold for what the field accepts.
+
+    None of these is a corner. install.sh refuses an --mtu past the ceiling
+    only as of this release; a server upgraded from an older one kept the
+    number it was built with, and 1409 to 1420 is an ordinary one - see
+    docs/UPDATES.md. What those used to read was to lower S4 to a value the
+    save refuses, or to a negative number.
+
+    The MTU it offers is that same ceiling, which is the budget less the nonce
+    and not the budget itself. Those are the same number only while S4 is at
+    or above HEADER_NONCE; with the padding off they are twelve apart, and it
+    is the larger one that the save then refuses.
     """
-    target = MTU_BUDGET - max(s4, HEADER_NONCE)
+    ceiling = PARAMS["MTU"].max or MTU_BUDGET - HEADER_NONCE
+    floor = PARAMS["MTU"].min or 1280
+    # The MTU that makes this S4 fit, and - already computed by the caller -
+    # the S4 that makes this MTU fit. Each is named only where it is a value
+    # the panel would take.
+    lower_mtu = MTU_BUDGET - max(s4, HEADER_NONCE)
+    mtu_is_a_way = lower_mtu >= floor
+    s4_is_a_way = free >= HEADER_NONCE
+
     if free < 0:
         room = (
             f"S4 = {s4} is added to every data packet, and an MTU of {mtu} is already "
             f"{-free} byte(s) past what an ordinary 1500-byte path leaves for the tunnel"
         )
-        ways = (
-            f"Lower the MTU to {target}. No S4 is small enough to fix this one: the "
-            f"datagram is over the link with the padding switched off"
+        no_s4 = (
+            "No S4 is small enough to fix this one: the datagram is over the link with "
+            "the padding switched off"
         )
     else:
         room = (
             f"S4 = {s4} is added to every data packet, but an MTU of {mtu} leaves only "
             f"{free} byte(s) for it on an ordinary 1500-byte path"
         )
-        ways = f"Lower S4 to {free}, or lower the MTU to {target}"
+        no_s4 = (
+            f"Lowering S4 instead is not a way out: an MTU of {mtu} is above the {ceiling} "
+            f"the Server page accepts whatever S4 is, and the {free} it would leave is under "
+            f"the {HEADER_NONCE} a header protection key reads its nonce from"
+        )
+
+    if s4_is_a_way and mtu_is_a_way:
+        ways = f"Lower S4 to {free}, or lower the MTU to {lower_mtu}"
+    elif s4_is_a_way:
+        ways = (
+            f"Lower S4 to {free}. There is no MTU to lower to instead: an S4 of {s4} would "
+            f"leave {lower_mtu}, under the {floor} IPv6 needs"
+        )
+    elif mtu_is_a_way:
+        ways = f"Lower the MTU to {lower_mtu}. {no_s4}"
+    else:
+        ways = (
+            f"Neither field is enough on its own: an MTU of {mtu} is past the {ceiling} the "
+            f"Server page accepts, and an S4 of {s4} leaves no MTU above the {floor} IPv6 "
+            f"needs. Set the MTU to {ceiling} and S4 to {HEADER_NONCE}"
+        )
     return (
         f"{room}. Full-size packets would be fragmented rather than refused - the outer "
         f"datagram carries no DF - and fragments are what a real path drops, so the tunnel "
