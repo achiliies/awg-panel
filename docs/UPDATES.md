@@ -220,50 +220,67 @@ keeps the wider ranges. Servers installed from any release after v1.1.1 draw the
 ranges narrow and are not affected; the panel reports the pairing on any profile
 that has it, however it got there.
 
-**A tunnel MTU above 1408 is the other one**, and it reaches you the same way:
-the upgrade keeps the number, and the number is now out of bounds. The panel
-used to accept an MTU up to 1420, and `install.sh --mtu` took anything from
-1280 to 9000, so a server sitting at 1409 or above is an ordinary one and not
-an exotic one. Both bounds are 1408 now and the installer refuses what the
-panel refuses, but that only stops the next install and not the one you
-already have. The budget behind it counted 20 bytes for the outer IP
-header, which is the IPv4 figure; the module reserves 40, because a hostname
-given to `--endpoint` may resolve to an AAAA and nothing in a config records
-which it will. Twenty bytes over is a datagram of up to 1520 on a 1500-byte
-link, and because the outer packet carries no DF it is fragmented rather than
-refused — so the tunnel stays up, small requests work, and large transfers
-stall wherever the fragments do not survive.
+**A tunnel MTU and an `S4` that no longer fit together is the other one**, and
+it reaches you the same way: the upgrade keeps both numbers, and the pair is now
+out of bounds. The budget behind them counted 20 bytes for the outer IP header,
+which is the IPv4 figure; the module reserves 40, because a hostname given to
+`--endpoint` may resolve to an AAAA and nothing in a config records which it
+will. So the budget was 1440 and is 1420, and the rule is the sum: an `MTU + S4`
+above it is a datagram of up to 1520 bytes on a 1500-byte link, and because the
+outer packet carries no DF it is fragmented rather than refused — the tunnel
+stays up, small requests work, and large transfers stall wherever the fragments
+do not survive.
 [The per-packet budget](PANEL.md#the-per-packet-budget) has the arithmetic.
 
-The panel does not hide it. A server over the budget carries the overrun on its
-status page, and the **Server** page refuses to save until the MTU comes down —
-on a field you may not have touched, which is the point: the number was already
-wrong before you opened the form. The ceiling is **1408**, the budget less the
-twelve bytes `S4` needs to carry a header protection nonce.
+**Read that as the sum, not as the MTU.** The ceiling on the MTU alone moved as
+well — the panel used to accept 1420 and `install.sh --mtu` took anything from
+1280 to 9000, and both are 1408 now, the budget less the twelve bytes `S4` needs
+to carry a header protection nonce — but a server sitting at 1409 or above is
+the rarer half of this. The common half is a server on the **old default of
+1400**, where the old budget left `S4` a band of 12 to 40 and anything drawn
+above 20 is now over. On **v1.1.3 and earlier** that is most of them: roughly
+two servers in three on *Standard* or *Random*, and **every** server on
+*DPI-resistant*, whose band starts at 24 and could not draw below it. If you
+have never changed your MTU, this paragraph is about you.
 
-The repair is an operator's again, and at the same reissue cost. The MTU has to
-match at both ends and is written into every config already handed out, so
-lowering it on **Server** means handing those configs out again. Nothing is
-down while you wait — a fragmenting tunnel is slow, not broken — and clients
-keep running on the old number until they are reissued.
+**The panel does not hide it, and it does not let you edit around it.** A server
+over the budget carries the overrun on its status page, and the save comes back
+refused on `MTU` and `S4` alike — fields you may not have touched, which is the
+point: the pair was already wrong before you opened the form. It is not only the
+**Server** page. Every save validates the whole configuration rather than the
+keys that changed, so a new `DNS` value or a different keepalive is refused on
+those same two fields until the pair is fixed. What the refusal names is a way
+out and a number the save will take.
 
-**The recommended MTU is now 1372**, and an upgrade leaves yours where it is —
-this one is a better default rather than a fault, so nothing warns about it.
+The repair is an operator's again, and at the same reissue cost. Either field
+settles it: lower `S4` to what the MTU leaves, on **Obfuscation**, or lower the
+MTU to `1420 − S4`, on **Server**. Both have to match at both ends and both are
+written into every config already handed out, so either one means handing those
+configs out again. Nothing is down while you decide — a fragmenting tunnel is
+slow, not broken — and clients keep running on the old numbers until they are
+reissued.
+
+**The recommended MTU is now 1372**, and an upgrade leaves yours where it is.
+This one is a better default and not a fault — a server at 1400 whose `S4` does
+fit inside the corrected budget is correct exactly where it stands, and nothing
+warns about it, which is what separates it from the paragraphs above.
 1400 was chosen against a 1500-byte link and fits one exactly: the largest data
 packet comes to 1500 bytes with nothing to spare, which is eight bytes over the
 1492 of a PPPoE line, and a client on DSL or VDSL has that packet fragmented on
 every full-size transfer. 1372 is the number at which `S4` reaches its own
 ceiling of 40 before the budget's, so the largest packet is 1492 whatever the
 profile draws, and it crosses those links whole. It costs about 1.5% of
-throughput, and it buys `S4` its full 12–40 band back — at 1400 the budget
-leaves room for only 12–20, whichever profile is chosen. Until the fix that
-came with this budget it was worse than narrow on *DPI-resistant*: that band
-asks for 24 upwards, both of its ends were clamped onto the 20 that was left,
-and every server on it drew `S4 = 20` exactly. Reconfigure on an upgraded
-server draws the spread again at whatever MTU it is on; the width of that
-spread is still what the MTU leaves. Moving it costs a client reissue like any
-other MTU change, so it is worth doing when you next hand configs out rather
-than on its own.
+throughput, and it buys `S4` its full 12–40 band back — at 1400 the corrected
+budget leaves room for only 12–20, whichever profile is chosen. It also buys
+back a spread the old clamp could close. Where the room left fell below a
+profile's own floor, both ends of the band were pinned onto it and the draw
+became a single value — a fingerprint with an extra step, on whichever profile
+had asked for the most padding. The floor now falls to the 12 a header
+protection nonce needs instead, so a band narrows under a tight MTU but never
+collapses. Reconfigure on an upgraded server draws the spread again at whatever
+MTU it is on; the width of it is still what the MTU leaves. Moving the MTU costs
+a client reissue like any other MTU change, so it is worth doing when you next
+hand configs out rather than on its own.
 
 On top of it, **a full backup is taken before anything is replaced**. It goes to
 `/var/lib/awg-panel/backups/awg-backup-<date>-<time>.tar.gz`, it is the same

@@ -1107,8 +1107,16 @@ _SPECS: list[ParamSpec] = [
         # equal to the budget would be arithmetically fine and would quietly
         # take both S4 and header protection away from anyone who used it.
         max=MTU_BUDGET - HEADER_NONCE,
-        recommended="1372",
-        default="1372",
+        # Both from DEFAULT_MTU rather than typed. This is the number the Server
+        # page offers and `GET server/params` hands the frontend, so a literal
+        # here is a fifth copy of it - and the only one nothing would hold to
+        # the other four. install.sh, clients.env and DEFAULT_MTU itself are
+        # pinned to each other by test_clientsenv.py and lib/obfs.sh's
+        # OBFS_DEFAULT_MTU by tests/obfs_check.py; this one sits eight hundred
+        # lines below the constant it was copied from, where a drift would show
+        # an operator a default no installer had ever written.
+        recommended=str(DEFAULT_MTU),
+        default=str(DEFAULT_MTU),
     ),
     ParamSpec(
         key="DNS",

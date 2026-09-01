@@ -24,13 +24,18 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-# clients.env exactly as install.sh writes it for SUBNET=10.13.13 and MTU=1400,
-# the run that also produced fixtures/server.conf. The two belong together: a
-# client config cannot be rendered without an endpoint host, and the subnet base
-# here is what the address allocator reads.
+# clients.env as install.sh wrote it for SUBNET=10.13.13 and MTU=1400, the run
+# that also produced fixtures/server.conf. The two belong together: a client
+# config cannot be rendered without an endpoint host, and the subnet base here is
+# what the address allocator reads.
 #
-# The header is the pre-CLI-removal one on purpose, matching the field: every
-# server installed before that upgrade still has this line, and nothing reads it.
+# Deliberately an older server's file, not what the installer writes today: the
+# header is the pre-CLI-removal one and the MTU is the 1400 that shipped before
+# the per-packet budget moved the default to 1372. An upgrade keeps both, so
+# this is the file most servers in the field actually have, and a fixture that
+# only carried current values would test the panel against the one case that
+# needs no reading at all. test_clientsenv.py is where the defaults are held to
+# what install.sh writes now.
 CLIENTS_ENV = """\
 # awg-client settings. Sourced by bash - every value must be QUOTED.
 ENDPOINT_HOST="203.0.113.10"    # blank = auto-detect

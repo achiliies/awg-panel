@@ -117,6 +117,13 @@ HDR6=40
 # width it happened and left to whoever picks the default MTU.
 ENFORCED=1500
 
+# The floor under any tunnel MTU this file offers as advice, and under any link
+# it can measure IPv6 across. One number because it is one rule: IPv6's minimum
+# link MTU, and every config install.sh writes claims ::/0, so below it the
+# tunnel comes up carrying no IPv6 at all. install.sh refuses an --mtu under it
+# for that reason and the panel's MTU field stops there.
+IPV6_MIN=1280
+
 R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
 fail=0
 reported=0
@@ -176,6 +183,15 @@ ip link del awgmtuprobe >/dev/null 2>&1
 cleanup() {
     ip netns del "$NS_S" >/dev/null 2>&1
     ip netns del "$NS_C" >/dev/null 2>&1
+    # And the pair itself, for the window in which it exists and neither end has
+    # reached a namespace yet - deleting the namespaces takes both ends with them
+    # only once they are inside. Without this, a build() that failed between
+    # `ip link add` and the two `ip link set netns` leaves the veth in the root
+    # namespace, and every pass after it dies on `File exists`: one failure
+    # turned into a run of them, on a file whose whole subject is that a
+    # measurement it could not take must not read like one it did. Deleting
+    # either end removes both.
+    ip link del "$VETH_S" >/dev/null 2>&1
 }
 trap cleanup EXIT
 cleanup   # anything a killed run left behind would make every count below a lie
@@ -356,15 +372,15 @@ build() {
 measure() {
     local family=$1 link=$2
     local before_c before_s after_c after_s reasm_c reasm_s reasm made rc
-    local ping_c ping_s hdr fit_mtu fit_s4 where
+    local ping_c ping_s hdr budget ceiling fit_mtu fit_s4 where
 
     where="link ${link} over IPv${family}"
 
     # IPv6 will not put a link under 1280 up at all, so there is nothing here to
     # measure rather than something that failed to measure. Only reachable when
     # a width was passed on the command line: the defaults are both above it.
-    if (( family == 6 && link < 1280 )); then
-        warn "${where}: under the 1280-byte IPv6 minimum, so it was not measured"
+    if (( family == 6 && link < IPV6_MIN )); then
+        warn "${where}: under the ${IPV6_MIN}-byte IPv6 minimum, so it was not measured"
         return 0
     fi
 
@@ -451,21 +467,48 @@ measure() {
                  "($reasm reassembled) - under ${ENFORCED}, so this is printed and not failed"
             reported=$(( reported + 1 ))
         fi
-        fit_mtu=$(( link - S4 - 32 - 8 - HDR6 ))
-        fit_s4=$(( link - MTU - 32 - 8 - HDR6 ))
+        # What this link leaves for the tunnel once the datagram is wrapped,
+        # which is OBFS_MTU_BUDGET itself at the 1500 that constant is drawn
+        # against. Taken from the link rather than from the constant because
+        # the advice has to hold at every width swept, and the ceiling with it:
+        # the largest MTU that still leaves S4 enough to carry a nonce.
+        budget=$(( link - 32 - 8 - HDR6 ))
+        ceiling=$(( budget - OBFS_HEADER_NONCE ))
+        fit_s4=$(( budget - MTU ))
+        # max(S4, nonce) and not S4 alone. The two are the same number only
+        # while S4 is at or above the nonce; with the padding already off they
+        # are OBFS_HEADER_NONCE apart, and it is the larger one - the budget
+        # itself - that the Server page then refuses to save.
+        fit_mtu=$(( budget - (S4 > OBFS_HEADER_NONCE ? S4 : OBFS_HEADER_NONCE) ))
         note "        a datagram of $(( MTU + S4 + 32 + 8 + hdr )) bytes over IPv${family} does"
         note "        not fit ${link}. The budget reserves ${HDR6} for the outer header whatever"
-        # Named only where it is a number worth setting, which is the same rule
-        # the panel's own advisory follows: under OBFS_HEADER_NONCE the padding
-        # can no longer carry a header protection nonce, so an S4 there is a
-        # config no key can be added to and not a fix. Below zero there is no S4
-        # at all - the MTU is over the link on its own.
-        if (( fit_s4 >= OBFS_HEADER_NONCE )); then
+        # Each field is named only where it is a way out, which is the rule the
+        # panel's own advisory follows: a number the save then refuses is the
+        # same dead end with an extra step, printed under a line that has just
+        # said something is wrong. S4 stops being one at OBFS_HEADER_NONCE
+        # rather than at zero, because a padding too short for the nonce is a
+        # config no header protection key can be added to afterwards; below
+        # zero there is no S4 at all and the MTU is over the link on its own.
+        # The MTU stops being one under IPV6_MIN.
+        if (( fit_s4 >= OBFS_HEADER_NONCE && fit_mtu >= IPV6_MIN )); then
             note "        the endpoint resolves to, so lower MTU to ${fit_mtu}, or S4 to ${fit_s4}"
-        else
+        elif (( fit_s4 >= OBFS_HEADER_NONCE )); then
+            note "        the endpoint resolves to, so lower S4 to ${fit_s4}. No MTU is a way"
+            note "        out here: an S4 of ${S4} leaves ${fit_mtu}, under the ${IPV6_MIN}"
+            note "        IPv6 needs"
+        elif (( fit_mtu >= IPV6_MIN )); then
             note "        the endpoint resolves to, so lower MTU to ${fit_mtu}. No S4 is a way"
-            note "        out here: ${link} leaves ${fit_s4} for it, under the"
-            note "        ${OBFS_HEADER_NONCE} a header protection nonce is read from"
+            if (( fit_s4 < 0 )); then
+                note "        out here: with the padding off the datagram is still over ${link}"
+            else
+                note "        out here: ${link} leaves ${fit_s4} for it, under the"
+                note "        ${OBFS_HEADER_NONCE} a header protection nonce is read from"
+            fi
+        else
+            note "        the endpoint resolves to, and neither field is enough on its own:"
+            note "        an MTU of ${MTU} is past the ${ceiling} this link carries whatever S4"
+            note "        is, and an S4 of ${S4} leaves no MTU above the ${IPV6_MIN} IPv6 needs."
+            note "        Set MTU to ${ceiling} and S4 to ${OBFS_HEADER_NONCE}"
         fi
     elif (( ping_c != 0 || ping_s != 0 )); then
         bad "${where}: no fragments, but full-size traffic did not get through"

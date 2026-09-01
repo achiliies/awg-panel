@@ -10,3 +10,8 @@ vendor/
 # its own tree.
 __pycache__/
 *.pyc
+
+# And the cache the root ruff run leaves. ruff writes its own .gitignore inside
+# it, so git was never going to show it - this is here so the directory is
+# listed where somebody looks for it, beside the panel tree's own entry.
+.ruff_cache/

@@ -90,7 +90,10 @@ jobs:
           # component otherwise: a bare --exclude=dist quietly took
           # panel/frontend/dist with it, so this tarball had never once carried
           # the built UI it claims to. The rest stay unanchored deliberately -
-          # '*/node_modules' has to match at any depth.
+          # '*/node_modules' has to match at any depth, and .ruff_cache is now
+          # written in two places rather than one: linting covers the panel and
+          # the checkers beside the shell suite, so a path-qualified
+          # panel/.ruff_cache would leave the root copy in the tarball.
           tar --exclude-vcs \
               --anchored \
               --exclude=./out \
@@ -103,7 +106,7 @@ jobs:
               --exclude='*/__pycache__' \
               --exclude='*.pyc' \
               --exclude=panel/.pytest_cache \
-              --exclude=panel/.ruff_cache \
+              --exclude=.ruff_cache \
               --transform "s,^\.,awg-panel-${TAG#v}," \
               -czf "out/awg-panel-${TAG#v}.tar.gz" .
 
