@@ -52,7 +52,7 @@ phase leaves the machine exactly as it was, and says so in those words.
 Only **stable** releases are ever offered. The check reads GitHub's
 `/releases/latest`, which excludes drafts and pre-releases by itself, and then
 refuses a release again on this side if the feed flags it as a pre-release or if
-the tag carries a pre-release suffix — a hyphen, as in `v1.2.0-rc1`. A candidate
+the tag carries a pre-release suffix — a hyphen, as in `v1.1.0-rc1`. A candidate
 is never installed and never counted as newer.
 
 Versions are compared the way semantic versioning says, which matters in one
