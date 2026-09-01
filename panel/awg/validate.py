@@ -318,9 +318,11 @@ def _span(*bands: tuple[int, int]) -> tuple[int, int]:
 # What no profile is free to trade away is HEADER_NONCE: every `s` and `s4` band
 # starts at or above it, including Fast's, because a profile that draws below it
 # is one that cannot be combined with a header protection key. Twelve bytes on a
-# data packet is the whole of what that costs, against a budget that is never
-# smaller than twenty, and the alternative is a Fast obfuscation set and a
-# generated 3.0 group that silently refuse to be used together.
+# data packet is the whole of what that costs, and the budget never leaves less:
+# the largest MTU the panel accepts is MTU_BUDGET - HEADER_NONCE, so even the
+# tightest draw there is has exactly twelve to spend. The alternative is a Fast
+# obfuscation set and a generated 3.0 group that silently refuse to be used
+# together.
 _FAST = Profile(
     key="fast",
     jc=(1, 3),
@@ -1083,7 +1085,7 @@ _SPECS: list[ParamSpec] = [
         group="network",
         label="Tunnel MTU",
         kind="int",
-        help_short="Largest packet the tunnel carries. Too high and big packets vanish.",
+        help_short="Largest packet the tunnel carries. Too high and big packets fragment.",
         help_long=(
             "The tunnel wraps every packet in headers of its own, so the MTU inside has to be "
             "smaller than the path outside. 1400 leaves room for the 80 bytes of overhead on a "
@@ -2476,13 +2478,41 @@ def data_padding_overrun(values: dict[str, str]) -> tuple[int, int] | None:
 
 
 def _padding_overrun_message(s4: int, free: int, mtu: int) -> str:
-    """One sentence for the overrun, naming the arithmetic and both ways out."""
+    """One sentence for the overrun, naming the arithmetic and the ways out.
+
+    Two shapes of it, because past the budget the MTU is over on its own:
+    switching the padding off entirely still leaves the datagram too large, so
+    there is no S4 to lower to and the sentence must not name one. That is not
+    a corner. install.sh takes --mtu up to 9000, a server built at one of those
+    has S4 off already because there was never room to draw one, and this is
+    what its status page says - so the advice it used to give was to lower S4
+    to a negative number.
+
+    The MTU it offers is the ceiling the Server page enforces, which is the
+    budget less the nonce and not the budget itself. Those are the same number
+    only while S4 is at or above HEADER_NONCE; with the padding off they are
+    twelve apart, and it is the larger one that the save then refuses.
+    """
+    target = MTU_BUDGET - max(s4, HEADER_NONCE)
+    if free < 0:
+        room = (
+            f"S4 = {s4} is added to every data packet, and an MTU of {mtu} is already "
+            f"{-free} byte(s) past what an ordinary 1500-byte path leaves for the tunnel"
+        )
+        ways = (
+            f"Lower the MTU to {target}. No S4 is small enough to fix this one: the "
+            f"datagram is over the link with the padding switched off"
+        )
+    else:
+        room = (
+            f"S4 = {s4} is added to every data packet, but an MTU of {mtu} leaves only "
+            f"{free} byte(s) for it on an ordinary 1500-byte path"
+        )
+        ways = f"Lower S4 to {free}, or lower the MTU to {target}"
     return (
-        f"S4 = {s4} is added to every data packet, but an MTU of {mtu} leaves only {free} byte(s) "
-        f"for it on an ordinary 1500-byte path. Full-size packets would be fragmented rather than "
-        f"refused - the outer datagram carries no DF - and fragments are what a real path drops, "
-        f"so the tunnel would look slow rather than broken. Lower S4 to {free}, or lower the MTU "
-        f"to {MTU_BUDGET - s4}."
+        f"{room}. Full-size packets would be fragmented rather than refused - the outer "
+        f"datagram carries no DF - and fragments are what a real path drops, so the tunnel "
+        f"would look slow rather than broken. {ways}."
     )
 
 

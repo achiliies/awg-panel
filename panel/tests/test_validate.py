@@ -361,7 +361,9 @@ def test_a_genuinely_unbalanced_firewall_still_warns():
 
 def test_padding_that_does_not_fit_the_mtu_is_refused():
     """The one overrun with no symptom at the moment it is made: the tunnel comes
-    up, small requests work, and only full-size packets vanish."""
+    up, small requests work, and full-size packets are fragmented rather than
+    refused - the outer datagram carries no DF - so what gives way is throughput
+    on a path the fragments do not survive."""
     errors = check({"MTU": "1400", "S4": "80"})
     assert "S4" in errors
     assert "1400" in errors["S4"] and "80" in errors["S4"]
@@ -401,6 +403,37 @@ def test_lowering_the_mtu_makes_the_same_padding_fit():
 def test_padding_switched_off_never_overruns():
     """0 means off in every tool here, so it is not a byte to charge for."""
     assert check({"MTU": str(validate.PARAMS["MTU"].max), "S4": "0"}) == {}
+
+
+def test_every_way_out_of_an_overrun_is_one_the_panel_would_save():
+    """An advisory naming a number the save then refuses is not advice.
+
+    Both halves of the sentence used to be reachable in a state where they were
+    not: install.sh takes --mtu up to 9000, a server built above the budget has
+    S4 off already because there was never room to draw one, and what it read on
+    its status page was to lower S4 to a negative number and the MTU to the
+    whole budget - twelve past the ceiling the Server page enforces.
+
+    So the assertion is on the numbers rather than the wording: whatever the
+    sentence offers has to be a value the panel would take."""
+    ceiling = validate.PARAMS["MTU"].max
+    over = {"MTU": "9000", "S4": "0"}
+    assert validate.data_padding_overrun(over), "the case under test has to overrun"
+    warning = validate.warnings_for(over)[0]
+
+    # No S4 is small enough when the MTU is over on its own, so the sentence
+    # must not offer one - naming any would be naming a negative number.
+    assert "Lower S4" not in warning, warning
+    assert f"Lower the MTU to {ceiling}" in warning, warning
+    assert check({"MTU": str(ceiling), "S4": "0"}) == {}
+
+    # Under the budget both ways out exist, and both have to land somewhere
+    # savable: S4 at what the MTU leaves, or the MTU at what S4 leaves.
+    tight = validate.warnings_for({"MTU": "1400", "S4": "120"})[0]
+    free, lowered = validate.MTU_BUDGET - 1400, validate.MTU_BUDGET - 120
+    assert f"Lower S4 to {free}, or lower the MTU to {lowered}." in tight, tight
+    assert check({"MTU": "1400", "S4": str(free)}) == {}
+    assert check({"MTU": str(lowered), "S4": "120"}) == {}
 
 
 def test_padding_without_an_mtu_is_left_alone():
