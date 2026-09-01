@@ -222,9 +222,11 @@ that has it, however it got there.
 
 **A tunnel MTU above 1408 is the other one**, and it reaches you the same way:
 the upgrade keeps the number, and the number is now out of bounds. The panel
-used to accept an MTU up to 1420, and `install.sh --mtu` still takes anything
-from 1280 to 9000, so a server sitting at 1409 or above is an ordinary one and
-not an exotic one. The budget behind it counted 20 bytes for the outer IP
+used to accept an MTU up to 1420, and `install.sh --mtu` took anything from
+1280 to 9000, so a server sitting at 1409 or above is an ordinary one and not
+an exotic one. Both bounds are 1408 now and the installer refuses what the
+panel refuses, but that only stops the next install and not the one you
+already have. The budget behind it counted 20 bytes for the outer IP
 header, which is the IPv4 figure; the module reserves 40, because a hostname
 given to `--endpoint` may resolve to an AAAA and nothing in a config records
 which it will. Twenty bytes over is a datagram of up to 1520 on a 1500-byte

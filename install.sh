@@ -260,8 +260,20 @@ valid_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 ));
 valid_port "$PANEL_PORT" || die "--panel-port '${PANEL_PORT}' is not a port between 1 and 65535"
 # 1280 is IPv6's minimum link MTU, and every config this writes claims ::/0:
 # below it the tunnel comes up and carries no IPv6 at all.
-[[ "$MTU" =~ ^[0-9]{1,5}$ ]] && (( MTU >= 1280 && MTU <= 9000 )) \
-    || die "--mtu '${MTU}' is not between 1280 and 9000"
+#
+# The top is the panel's, and derived rather than typed. This took anything up
+# to 9000 until now, which was never coherent with --no-panel being refused:
+# the panel is always installed, it will not save an MTU above this, and so the
+# server came up with its Server page already refusing a number nobody had
+# touched. Past it the datagram is larger than an ordinary 1500-byte path
+# carries and is fragmented rather than dropped, which costs throughput with
+# nothing in any log to say why. It is the per-packet budget less the nonce
+# rather than the budget itself, because at the budget S4 would have to be 0
+# and a config with no padding is one no header protection key can be added to
+# later - see lib/obfs.sh for both constants and docs/PANEL.md for the sum.
+MTU_MAX=$(( OBFS_MTU_BUDGET - OBFS_HEADER_NONCE ))
+[[ "$MTU" =~ ^[0-9]{1,5}$ ]] && (( MTU >= 1280 && MTU <= MTU_MAX )) \
+    || die "--mtu '${MTU}' is not between 1280 and ${MTU_MAX}"
 # What the kernel will accept as a device name, which is also what keeps this
 # out of the paths built from it below.
 [[ "$IFACE" =~ ^[A-Za-z0-9_.-]{1,15}$ ]] \

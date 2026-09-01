@@ -79,10 +79,13 @@ PYTHONPATH="$REPO/panel" "$PY" "$REPO/tests/obfs_check.py" "$WORK/profiles.tsv"
 RC=$?
 
 # The one case the validator above cannot be asked about, because it is not a
-# config the panel would accept: --mtu takes anything up to 9000, and past
-# OBFS_MTU_BUDGET - OBFS_HEADER_NONCE there is no room left for S4 at all. The
-# header protection key's nonce is read from the first OBFS_HEADER_NONCE bytes
-# of that prefix, so a key written over a missing one is `awg setconf`
+# config the panel would accept. install.sh now refuses an --mtu past
+# OBFS_MTU_BUDGET - OBFS_HEADER_NONCE, so this is no longer something it can
+# write - but gen_obfuscation is handed the MTU off a live awg0.conf too, and
+# a server installed before that bound still carries whatever it was given.
+# Past the bound there is no room left for S4 at all, and the header
+# protection key's nonce is read from the first OBFS_HEADER_NONCE bytes of
+# that prefix - so a key written over a missing one is `awg setconf`
 # returning EINVAL and an interface that never comes up - on a box the operator
 # is watching install itself. The key has to be the thing that gives way, and
 # the timers and the trailer switch have to survive it: neither is carried in

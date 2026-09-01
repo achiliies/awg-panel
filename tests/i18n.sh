@@ -351,8 +351,8 @@ printf '\n== what a failing install says ==\n'
 # put the one message an operator has to act on in the language they said they
 # could not read.
 #
-# Two messages are exempt and stay English. One about a flag - "--mtu '9001'
-# is not between 1280 and 9000" - is a command line and the value typed into
+# Two messages are exempt and stay English. One about a flag - "--mtu '1500'
+# is not between 1280 and 1408" - is a command line and the value typed into
 # it, neither of which is in Russian on anybody's terminal. An "internal:" is
 # a bug report and its reader is here, not on the server.
 untranslated() {

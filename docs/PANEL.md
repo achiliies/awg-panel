@@ -927,10 +927,11 @@ whose importer drops these lines, was already turned away by the key and turned
 away the same silent way.
 
 **Without one**, it turns away every client below 3.1. A server has no key when
-its MTU left `S4` too short to carry the nonce — `install.sh --mtu 1409` or
-higher, and *Reconfigure* on a server built that way — and nothing else in the
-group fails outright to cover for it: a client too old for the padding or the
-timers ignores those lines and stays connected, as the table in
+its MTU left `S4` too short to carry the nonce — an installer old enough to
+have accepted `--mtu 1409` or higher, and *Reconfigure* on a server built
+that way — and nothing else in the group fails outright to cover for it: a
+client too old for the padding or the timers ignores those lines and stays
+connected, as the table in
 [A client stopped connecting](#troubleshooting) says. On that server this switch
 is the only hard stop in the config. If you run one, that is the case to think
 about before saving.

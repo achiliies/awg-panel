@@ -1802,12 +1802,26 @@ def _padding_sizes(
 
     room = MTU_BUDGET - _mtu_or_default(mtu)
     s4_low, s4_high = band.s4
-    # The MTU overrules the profile at both ends of the band, not only the top:
-    # DPI-resistant asks for 24 upwards and a tunnel at the panel's ceiling
-    # leaves HEADER_NONCE, and answering that with the profile's floor would
-    # overrun while answering it with nothing at all would put S4 below
-    # HEADER_NONCE - a set that cannot be combined with a header protection key.
-    # So it draws what fits.
+    # The MTU overrules the profile's ceiling, because the profile is a
+    # preference and the budget is arithmetic: DPI-resistant asks for 24 upwards
+    # and the default MTU leaves 20, and answering that with the profile's top
+    # would put a datagram on the wire that does not fit.
+    #
+    # What the MTU does not get to do is take the spread with it. Clamping both
+    # ends onto `room` is what a band too high to fit used to do, and where it
+    # landed was a single value - every DPI-resistant server at the default MTU
+    # drew S4 = 20, exactly. A constant is the one thing this function exists
+    # not to produce: it is a fingerprint with an extra step, and it is worst on
+    # the profile chosen by people who are being classified. There is no more
+    # padding to be had at that MTU, so what is left worth keeping is the
+    # spread, and the floor drops to the widest band that still clears the
+    # nonce - never below it, because a draw under HEADER_NONCE is a set no
+    # header protection key can be added to afterwards.
+    #
+    # Named apart from the `low`/`high` above, which are the S-band that S1, S2
+    # and S3 are still drawn from in the return below.
+    top = min(s4_high, room)
+    floor = s4_low if s4_low <= top else HEADER_NONCE
     #
     # Under HEADER_NONCE there is no honest answer left, and it is no padding
     # rather than a value that would quietly fragment every full-size packet.
@@ -1815,7 +1829,7 @@ def _padding_sizes(
     # accepts is MTU_BUDGET - HEADER_NONCE, which leaves exactly HEADER_NONCE -
     # so a set drawn against a config in that state is one whose MTU is already
     # an error, and that is what is shown.
-    s4 = rng.randint(min(s4_low, room), min(s4_high, room)) if room >= HEADER_NONCE else 0
+    s4 = rng.randint(floor, top) if room >= HEADER_NONCE else 0
 
     return {"S1": str(s1), "S2": str(s2), "S3": str(rng.randint(low, high)), "S4": str(s4)}
 

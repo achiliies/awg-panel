@@ -702,6 +702,47 @@ def test_no_profile_raises_an_advisory(profile):
 
 
 @pytest.mark.parametrize("profile", PROFILE_KEYS)
+def test_every_profile_draws_s1_to_s3_from_its_own_band(profile):
+    """S1, S2 and S3 come from the profile's `s` band and S4 from `s4`, and the
+    two are drawn a few lines apart in the same function against different
+    bounds. Nothing else in this file would notice them confused: every value in
+    the S4 band is a legal S1, so a set drawn from the wrong one validates,
+    generates and ships - it is only the handshake padding quietly a fraction of
+    the size the profile asked for, which is the disguise getting thinner with
+    no field to show it in."""
+    band = validate.PROFILES[profile].s
+    for _ in range(ROUNDS):
+        values = validate.randomize(mtu=validate.DEFAULT_MTU, profile=profile)
+        for key in ("S1", "S2", "S3"):
+            drawn = int(values[key])
+            assert band[0] <= drawn <= band[1], f"{profile}: {key} = {drawn} outside {band}"
+
+
+@pytest.mark.parametrize("profile", PROFILE_KEYS)
+def test_no_profile_draws_s4_as_a_constant_when_the_mtu_leaves_a_choice(profile):
+    """A band the MTU cannot fit is still a band, and clamping both of its ends
+    onto the room left is what turned one into a constant: DPI-resistant asks
+    for 24 upwards, the default MTU leaves 20, and so every server on that
+    profile drew S4 = 20 exactly. That is the fingerprint randomize() exists to
+    remove, on the profile picked by the people most likely to be classified -
+    and it was invisible from the other tests here, because a constant sits
+    inside the headroom and above the nonce floor like any other value.
+
+    Asserted wherever the room allows more than one legal answer, which is every
+    MTU below the panel's ceiling. At the ceiling the room is HEADER_NONCE and
+    there is exactly one, so a constant there is arithmetic and not drift."""
+    for mtu in MTUS:
+        room = validate.MTU_BUDGET - mtu
+        if room <= validate.HEADER_NONCE:
+            continue
+        drawn = {int(validate.randomize(mtu=mtu, profile=profile)["S4"]) for _ in range(ROUNDS)}
+        assert len(drawn) > 1, (
+            f"{profile}: every draw at MTU {mtu} came back S4 = {drawn.pop()}, "
+            f"with {room} bytes of room to choose from"
+        )
+
+
+@pytest.mark.parametrize("profile", PROFILE_KEYS)
 def test_every_profile_keeps_s4_inside_the_mtu_headroom(profile):
     for mtu in MTUS:
         for _ in range(ROUNDS):
