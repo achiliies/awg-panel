@@ -148,9 +148,7 @@ def generate(target: Path) -> None:
             accept.append(f"{spelling}\t{network}")
     (target / "accept.tsv").write_text("\n".join(accept) + "\n", encoding="utf-8")
     (target / "reject.txt").write_text("\n".join(REJECT) + "\n", encoding="utf-8")
-    (target / "offsets.txt").write_text(
-        "\n".join(str(n) for n in OFFSETS) + "\n", encoding="utf-8"
-    )
+    (target / "offsets.txt").write_text("\n".join(str(n) for n in OFFSETS) + "\n", encoding="utf-8")
     (target / "routes.txt").write_text("\n".join(ROUTE_LISTS) + "\n", encoding="utf-8")
     print(
         f"{len(accept)} spellings, {len(REJECT)} rejects, {len(OFFSETS)} offsets, "
@@ -177,9 +175,7 @@ def verify(target: Path) -> int:
         bash_hosts = fields[4:]
 
         if bash_cidr == "PARSE_FAIL":
-            problems.append(
-                f"bash refused {spelling!r}, which is a legal spelling of {expected}"
-            )
+            problems.append(f"bash refused {spelling!r}, which is a legal spelling of {expected}")
             continue
 
         network = subnet6.parse(spelling)
@@ -187,32 +183,35 @@ def verify(target: Path) -> int:
             problems.append(f"python read {spelling!r} as {network}, not {expected}")
             continue
         if subnet6.cidr(network) != bash_cidr:
-            problems.append(
-                f"{spelling!r}: bash cidr {bash_cidr}, python {subnet6.cidr(network)}"
-            )
+            problems.append(f"{spelling!r}: bash cidr {bash_cidr}, python {subnet6.cidr(network)}")
         if subnet6.server_addr(network) != bash_server:
             problems.append(
                 f"{spelling!r}: bash server {bash_server}, python {subnet6.server_addr(network)}"
             )
 
-        for offset, got in zip(OFFSETS, bash_hosts):
+        # Counted before they are paired. bash_hosts is however many columns the
+        # shell happened to write, and zip() would quietly stop at the shorter
+        # of the two - so a run where the shell emitted nine hosts for ten
+        # offsets would compare nine and report nothing about the tenth, which
+        # is a missing answer reported as a passing one.
+        if len(bash_hosts) != len(OFFSETS):
+            problems.append(
+                f"{spelling!r}: bash wrote {len(bash_hosts)} hosts for {len(OFFSETS)} offsets"
+            )
+            continue
+
+        for offset, got in zip(OFFSETS, bash_hosts, strict=True):
             want = subnet6.host_addr(network, offset)
             if got != want:
-                problems.append(
-                    f"{spelling!r} offset {offset}: bash {got}, python {want}"
-                )
+                problems.append(f"{spelling!r} offset {offset}: bash {got}, python {want}")
                 continue
             # Independent of both: does the string land where it claims to?
             address = ipaddress.IPv6Address(got)
             if address not in network:
-                problems.append(
-                    f"{spelling!r} offset {offset}: {got} is outside {network}"
-                )
+                problems.append(f"{spelling!r} offset {offset}: {got} is outside {network}")
             elif int(address) - int(network.network_address) != offset:
                 real = int(address) - int(network.network_address)
-                problems.append(
-                    f"{spelling!r} offset {offset}: {got} is really +{real}"
-                )
+                problems.append(f"{spelling!r} offset {offset}: {got} is really +{real}")
 
     refused = (target / "rejected.tsv").read_text(encoding="utf-8").splitlines()
     for row in refused:
@@ -222,14 +221,8 @@ def verify(target: Path) -> int:
         python_took = subnet6.parse_or_none(value) is not None
         bash_took = verdict != "REJECTED"
         if bash_took or python_took:
-            who = (
-                "both"
-                if bash_took and python_took
-                else ("bash" if bash_took else "python")
-            )
-            problems.append(
-                f"{who} accepted {value!r}, which is not a usable tunnel prefix"
-            )
+            who = "both" if bash_took and python_took else ("bash" if bash_took else "python")
+            problems.append(f"{who} accepted {value!r}, which is not a usable tunnel prefix")
 
     routes = (target / "routes-out.tsv").read_text(encoding="utf-8").splitlines()
     for row in routes:

@@ -75,7 +75,11 @@ for (( round = 0; round < ROUNDS; round++ )); do
     } >> "$WORK/profiles.tsv"
 done
 
-PYTHONPATH="$REPO/panel" "$PY" "$REPO/tests/obfs_check.py" "$WORK/profiles.tsv"
+# The two constants go with it. They are what the shell drew every profile
+# above against, and obfs_check.py is the only place that can hold them up to
+# both the packet layout and the panel's own copy of the same numbers.
+OBFS_MTU_BUDGET="$OBFS_MTU_BUDGET" OBFS_HEADER_NONCE="$OBFS_HEADER_NONCE" \
+    PYTHONPATH="$REPO/panel" "$PY" "$REPO/tests/obfs_check.py" "$WORK/profiles.tsv"
 RC=$?
 
 # The one case the validator above cannot be asked about, because it is not a

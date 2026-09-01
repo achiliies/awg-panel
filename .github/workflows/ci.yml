@@ -297,6 +297,19 @@ jobs:
           ruff check .
           ruff format --check .
 
+      # The step above runs with the job's `working-directory: panel`, so its
+      # `.` is the panel tree and nothing under tests/ was ever reached. That
+      # is where wire.py lives - the packet-size model this whole suite measures
+      # against - along with the checkers the shell tests drive, and they went
+      # unlinted from the day they were added. ruff.toml at the repo root gives
+      # them the panel's own settings; panel/pyproject.toml still governs the
+      # panel, because ruff takes the nearest config to each file.
+      - name: Lint the checkers beside the shell suite
+        working-directory: .
+        run: |
+          ruff check tests
+          ruff format --check tests
+
       # No kernel module and no awg binary on the runner: everything has to
       # pass against the mock controller, which is the same path `make dev`
       # uses on a laptop.

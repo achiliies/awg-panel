@@ -1,0 +1,28 @@
+# The Python that lives beside the shell suite rather than inside the panel:
+# tests/wire.py, the packet-size model both halves of the suite measure against,
+# and tests/obfs_check.py, which drives it. Those two arrived with the per-packet
+# budget work and were never linted at all - the CI step that runs ruff inherits
+# the panel job's `working-directory: panel`, so `ruff check .` stopped at the
+# panel tree and five hundred lines sat outside it.
+#
+# panel/ keeps its own [tool.ruff] in pyproject.toml and goes on using it: ruff
+# takes the nearest config to each file, so nothing here reaches that tree.
+#
+# The settings are the panel's on purpose. These files import awg.validate and
+# are read beside panel/tests/test_wire_sizes.py, which asserts against the same
+# model - a different line length or rule set here would only mean one reviewer
+# meeting two house styles inside one change.
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+# The formatter already holds code to 100 columns. What E501 would still catch
+# is the comments naming module source lines, and breaking `socket.c:151` across
+# two lines to satisfy a linter makes the reference worse.
+ignore = ["E501"]
+
+[lint.isort]
+# `wire` is a local module reached through sys.path rather than an install, and
+# `awg` comes from panel/ the same way, so neither is third-party.
+known-first-party = ["awg", "wire"]

@@ -197,8 +197,7 @@ def check(number: int, values: dict[str, str]) -> None:
         if not validate.H_WIDTH_LO <= width <= validate.H_WIDTH_HI:
             fail(
                 number,
-                f"{name} is {width} wide, outside "
-                f"{validate.H_WIDTH_LO}-{validate.H_WIDTH_HI}",
+                f"{name} is {width} wide, outside {validate.H_WIDTH_LO}-{validate.H_WIDTH_HI}",
             )
 
     if drawn:
@@ -231,18 +230,13 @@ def check_wire(number: int, values: dict[str, str]) -> None:
     separately, and it is worth one assertion that it still holds.
     """
     try:
-        profile = {
-            key: int(values[key])
-            for key in ("MTU", "S1", "S2", "S3", "S4", "Jmax")
-        }
+        profile = {key: int(values[key]) for key in ("MTU", "S1", "S2", "S3", "S4", "Jmax")}
     except (KeyError, ValueError) as exc:
         fail(number, f"wire sizes could not be measured: {exc}")
         return
     profile["RandomTrailers"] = 1 if values.get("RandomTrailers") == "on" else 0
 
-    imitation = tuple(
-        len(render(values[f"I{n}"])) for n in range(1, 6) if values.get(f"I{n}")
-    )
+    imitation = tuple(len(render(values[f"I{n}"])) for n in range(1, 6) if values.get(f"I{n}"))
 
     for link in wire.LINKS:
         margins[link.name].append(wire.headroom(profile, link, imitation))
@@ -353,9 +347,55 @@ def check_advanced_bands(number: int, values: dict[str, str]) -> None:
             fail(number, f"I{slot} does not parse: {exc}")
 
 
+def check_the_budget() -> None:
+    """lib/obfs.sh's own constants, against the packet layout and against the panel's.
+
+    Everything else here measures profiles the shell drew, and each one is
+    checked with `headroom >= 0`. A budget that had drifted *downwards* would
+    satisfy every one of them: the datagrams would only get smaller, nothing
+    would fail, and what the installer shipped would quietly be less padding
+    than the panel allows - a weaker disguise, arrived at silently, which is the
+    same class of fault as an oversized one and has no symptom at all.
+
+    So the budget is pinned from both sides, the way test_wire_sizes.py pins the
+    panel's: exactly zero headroom at the budget, and negative one byte past it.
+    Plus the one thing lib/obfs.sh cannot check about itself - that the number it
+    holds is the number awg.validate holds, since two implementations agreeing is
+    the whole reason either can be trusted.
+    """
+    budget, nonce = os.environ.get("OBFS_MTU_BUDGET"), os.environ.get("OBFS_HEADER_NONCE")
+    if not budget or not nonce:
+        failures.append("the budget: lib/obfs.sh's constants were not passed to this check")
+        return
+    budget, nonce = int(budget), int(nonce)
+
+    if budget != validate.MTU_BUDGET:
+        failures.append(
+            f"the budget: lib/obfs.sh says {budget}, awg.validate says {validate.MTU_BUDGET}"
+        )
+    if nonce != validate.HEADER_NONCE:
+        failures.append(
+            f"the nonce floor: lib/obfs.sh says {nonce}, awg.validate says {validate.HEADER_NONCE}"
+        )
+
+    # S4 at 0 and the MTU at the budget is the budget's own definition: the
+    # largest tunnel MTU a 1500-byte link carries once the outer headers, the
+    # transport header and the tag are taken out of it.
+    at = {"MTU": budget, "S4": 0, "S1": 24, "S2": 24, "S3": 24, "Jmax": 64, "RandomTrailers": 1}
+    if wire.headroom(at, wire.ETHERNET) != 0:
+        failures.append(f"the budget: {wire.explain(at, wire.ETHERNET)}, expected exactly 0 spare")
+    if wire.headroom({**at, "MTU": budget + 1}, wire.ETHERNET) >= 0:
+        failures.append(
+            f"the budget: an MTU of {budget + 1} still fits a 1500-byte link, so "
+            f"{budget} is under what the layout allows and every profile is short of padding"
+        )
+
+
 def main(path: str) -> int:
     with open(path) as handle:
         rows = [line.rstrip("\n") for line in handle if line.strip()]
+
+    check_the_budget()
 
     for number, row in enumerate(rows, start=1):
         values = dict(field.split("=", 1) for field in row.split("\t"))
