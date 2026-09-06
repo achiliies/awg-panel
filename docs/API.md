@@ -943,7 +943,7 @@ Idempotent: starting a tunnel that is already up answers `204`.
   "ifaceUp": true,
   "moduleLoaded": true,
   "toolsVersion": "amneziawg-tools v3.1.20260812 - https://amnezia.org",
-  "moduleVersion": "3.1.20260828",
+  "moduleVersion": "3.1.20260906",
   "features": { "headerRanges": true, "imitationPackets": true,
                 "headerProtectionKey": true, "contentPadding": true, "timers": true,
                 "randomTrailers": true, "disableCookies": true },

@@ -230,9 +230,11 @@ def check_wire(number: int, values: dict[str, str]) -> None:
 
     The handshake burst is measured beside the data packets rather than assumed
     to be smaller than them. With RandomTrailers on it very nearly is - the
-    trailer is drawn against a window derived from the largest data packet - but
-    that relationship is a consequence of two settings that are edited
-    separately, and it is worth one assertion that it still holds.
+    initiation and the response are drawn against a window derived from the
+    largest data packet, and since v3.1.20260906 the junk and the decoys are
+    not drawn out at all - but that relationship is a consequence of two
+    settings that are edited separately, and it is worth one assertion that it
+    still holds.
     """
     try:
         profile = {key: int(values[key]) for key in ("MTU", "S1", "S2", "S3", "S4", "Jmax")}

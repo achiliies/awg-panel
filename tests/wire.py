@@ -51,7 +51,7 @@ HANDSHAKE_INITIATION = 148
 HANDSHAKE_RESPONSE = 92
 HANDSHAKE_COOKIE = 64
 
-# peer.c:38 and socket.c:335 - what udp_window is before a peer has sent or
+# peer.c:38 and socket.c:337 - what udp_window is before a peer has sent or
 # received anything, and what it is reset to when the endpoint moves.
 DEFAULT_UDP_WINDOW = 500
 
@@ -93,18 +93,21 @@ LINKS = (ETHERNET, PPPOE)
 def data_packet(mtu: int, s4: int, family: Family = IPV4) -> int:
     """The largest datagram a full-size data packet becomes, outer headers in.
 
-    send.c:288-321 in order: S4 random bytes pushed onto the front of an
+    send.c:265-298 in order: S4 random bytes pushed onto the front of an
     already finished packet, the 16-byte message_data header, the plaintext,
     and the authentication tag. The plaintext is the packet the tunnel was
     handed plus its padding, and encrypt_packet picks one of three paddings for
-    it (send.c:277-284), none of which can carry it past the MTU:
-    calculate_skb_padding takes min(mtu, ALIGN(len, 16)), randomize_skb_padding
-    takes min(addition, mtu - len), and the RandomTrailers path takes
-    get_random_u32_below(udp_window - len - MESSAGE_MINIMUM_LENGTH - S4). Only
-    the first two are clamped against the MTU by name. The third is clamped
-    against udp_window, which is itself S4 + MESSAGE_MINIMUM_LENGTH + MTU, so
-    it arrives in the same place by a different route - and a full-size packet
-    is exactly MTU bytes of plaintext on all three, with no padding at all.
+    it (send.c:254-260), none of which can carry it past the MTU.
+    calculate_skb_padding (send.c:204) is the only one that names the MTU, and
+    it takes min(mtu, ALIGN(len, 16)) - len. The other two are handed
+    packet_len, which is len + MESSAGE_MINIMUM_LENGTH + S4 (send.c:253), and
+    draw inside udp_window - packet_len: ContentPaddingAddition takes
+    min(addition, that) and the RandomTrailers path takes
+    get_random_u32_below(it), both in peer.h:98-124. Neither mentions the MTU
+    and neither has to - udp_window is S4 + MESSAGE_MINIMUM_LENGTH + MTU, so
+    what those two are drawing inside is MTU - len by another spelling, and a
+    full-size packet is exactly MTU bytes of plaintext on all three, with no
+    padding at all.
 
     Those clamps are why ContentPaddingAddition is absent from this sum. It
     rides on every data packet as S4 does, and there the resemblance stops: it
@@ -117,7 +120,7 @@ def data_packet(mtu: int, s4: int, family: Family = IPV4) -> int:
 def udp_window(mtu: int, s4: int) -> int:
     """The trailer window a peer opens once full-size traffic has flowed.
 
-    send.c:266 on send and receive.c:571 on receive, both `padding +
+    send.c:243 on send and receive.c:571 on receive, both `padding +
     MESSAGE_MINIMUM_LENGTH + skb->len`, kept as a high-water mark. Note what it
     is measured from: the packet this peer put on the wire, not one the far end
     acknowledged. A path that is silently fragmenting every full-size packet
@@ -134,29 +137,38 @@ def handshake_packet(
     body: int,
     padding: int,
     window: int,
-    trailers: bool,
+    trailer: bool,
     family: Family = IPV4,
 ) -> int:
     """The largest datagram one handshake-time packet becomes.
 
     Almost everything sent outside the data path goes through
-    wg_socket_send_buffer_to_peer (socket.c:190): the initiation (send.c:87),
+    wg_socket_send_buffer_to_peer (socket.c:189): the initiation (send.c:88),
     the response (send.c:158), each of the Jc junk packets (send.c:75) and each
-    of the I1-I5 imitation packets (send.c:56). All four get the same treatment
-    - `padding` random bytes in front, then a trailer of
-    get_random_u32_below(udp_window - size) bytes appended when RandomTrailers
-    is set (peer.h:98-107). The cookie reply is the one exception, and `window`
-    is where it differs - see handshake_burst.
+    of the I1-I5 imitation packets (send.c:56). All four get `padding` random
+    bytes in front. Only some of them get a trailer, and `trailer` is that
+    choice and not the RandomTrailers switch: the call site passes it as a
+    literal (socket.c:190) and the switch is read inside
+    wg_peer_skb_random_trailer (peer.h:98-107), so a packet grows by
+    get_random_u32_below(udp_window - size) bytes only when both are set.
 
-    So with the switch on, every one of those packets is drawn uniformly across
-    the whole window: a 20-byte STUN decoy and a 148-byte initiation both
-    arrive at any length up to one byte short of the largest data packet the
-    peer has sent. This is the part that is easy to get wrong twice - once by
-    forgetting the trailer applies to the decoys at all, and once by reading
-    the window as a property of the path rather than of the sender.
+    The two junk kinds pass false as of v3.1.20260906, and that is the whole of
+    what the release changed. A decoy only works on a filter that parses it,
+    and a random tail made every one of them a malformed instance of the
+    protocol it was copying - a STUN binding request whose length field no
+    longer matches the bytes after it. So a decoy is now exactly as long as the
+    bytes in the config, the junk burst is exactly Jmin-Jmax, and the
+    initiation and the response are what draw against the window. The cookie
+    reply is the one packet that never had the choice - see handshake_burst.
+
+    With the switch on, an initiation is drawn uniformly across that window: a
+    148-byte message arriving at any length up to one byte short of the largest
+    data packet the peer has sent. The window is a property of the sender and
+    not of the path, which is the half of this that is easy to read the wrong
+    way round.
     """
     size = padding + body
-    if trailers and window > size:
+    if trailer and window > size:
         size = window - 1
     return size + UDP_HEADER + family.header
 
@@ -173,15 +185,22 @@ def handshake_burst(
     packets, up to five decoys and the initiation, sent back to back, so this
     is the size of its worst member rather than its total.
 
-    The cookie reply is the one member that does not draw against the peer's
-    window. It leaves through wg_socket_send_buffer_as_reply_to_skb
-    (socket.c:223), which is answering a datagram rather than talking to a peer
-    it has looked up, and passes NULL where the others pass one - so
-    wg_peer_skb_random_trailer takes its DEFAULT_UDP_WINDOW branch (peer.h:101)
-    and the reply is drawn inside 500 bytes however wide the session's window
-    has opened. It is never the largest packet here; it is modelled correctly
-    anyway, because a model that is conservative by accident is one nobody can
-    tell from a model that is right.
+    The cookie reply is the one member that neither draws against the peer's
+    window nor gets a say in whether it is padded at all. It leaves through
+    wg_socket_send_buffer_as_reply_to_skb (socket.c:225), which is answering a
+    datagram rather than talking to a peer it has looked up: it calls
+    wg_peer_skb_random_trailer directly (socket.c:242), with no flag to pass,
+    and passes NULL where the others pass a peer - so the trailer takes its
+    DEFAULT_UDP_WINDOW branch (peer.h:101) and the reply is drawn inside 500
+    bytes however wide the session's window has opened. It is never the largest
+    packet here; it is modelled correctly anyway, because a model that is
+    conservative by accident is one nobody can tell from a model that is right.
+
+    The junk and the decoys are passed the window they are sent inside and a
+    trailer of false, which is what the module does with them. Keeping the
+    window on the call rather than dropping the argument is deliberate: they
+    are still members of this burst, and the day one of them is given a trailer
+    back is the day this file has to say so in one place.
     """
     trailers = bool(profile.get("RandomTrailers"))
     window = udp_window(profile["MTU"], profile["S4"])
@@ -189,9 +208,9 @@ def handshake_burst(
         handshake_packet(HANDSHAKE_INITIATION, profile["S1"], window, trailers, family),
         handshake_packet(HANDSHAKE_RESPONSE, profile["S2"], window, trailers, family),
         handshake_packet(HANDSHAKE_COOKIE, profile["S3"], DEFAULT_UDP_WINDOW, trailers, family),
-        handshake_packet(profile["Jmax"], 0, window, trailers, family),
+        handshake_packet(profile["Jmax"], 0, window, False, family),
     ]
-    sizes += [handshake_packet(length, 0, window, trailers, family) for length in imitation]
+    sizes += [handshake_packet(length, 0, window, False, family) for length in imitation]
     return max(sizes)
 
 

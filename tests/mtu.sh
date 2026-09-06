@@ -570,10 +570,11 @@ if (( reported )); then
     note "and tests/obfs.sh print the same number from the arithmetic side."
 fi
 if (( fail )); then
-    note "The handshake burst is not measured here. With RandomTrailers on, every"
-    note "packet sent at handshake time is padded into a window derived from the"
-    note "largest data packet the peer has sent (peer.h:98, send.c:266), so it is"
-    note "bounded by what is measured above and fragments whenever that does."
-    note "panel/tests/test_wire_sizes.py asserts that bound directly."
+    note "The handshake burst is not measured here. With RandomTrailers on, the"
+    note "initiation and the response are padded into a window derived from the"
+    note "largest data packet the peer has sent (peer.h:98, send.c:243), and the"
+    note "junk and the decoys go out at the size the config gives them - so the"
+    note "burst is bounded by what is measured above and fragments whenever that"
+    note "does. panel/tests/test_wire_sizes.py asserts that bound directly."
 fi
 exit "$fail"

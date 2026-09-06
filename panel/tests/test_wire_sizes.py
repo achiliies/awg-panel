@@ -10,7 +10,7 @@ this file measures the panel against it.
 The distinction that matters here is between two different things a test can
 say. That a full-size datagram fits a 1500-byte link is arithmetic: the link is
 the widest untunnelled path that exists, the module's own `dev->mtu` reserves
-`max(sizeof(ipv6hdr), sizeof(iphdr))` for exactly this (device.c:300), and a
+`max(sizeof(ipv6hdr), sizeof(iphdr))` for exactly this (device.c:301), and a
 profile that does not fit has nowhere left to go. That is asserted. How much
 margin to leave *under* 1500 - for the PPPoE link most home clients are behind,
 for a carrier that tunnels, for a VPS with something in front of it - is a
@@ -226,12 +226,18 @@ def test_the_budget_the_validator_enforces_matches_the_packet():
 
 
 def test_the_handshake_burst_stays_inside_the_data_packet():
-    """With RandomTrailers on, every packet sent at handshake time - the
-    initiation, the junk, and each decoy - is padded to a random length inside a
-    window derived from the largest data packet the peer has sent (peer.h:98,
-    send.c:266). So the burst costs nothing the data packets have not already
-    cost, which is the whole argument for leaving the switch on without a budget
-    of its own.
+    """With RandomTrailers on, the initiation and the response are padded to a
+    random length inside a window derived from the largest data packet the peer
+    has sent (peer.h:98, send.c:243). So the burst costs nothing the data
+    packets have not already cost, which is the whole argument for leaving the
+    switch on without a budget of its own.
+
+    The junk and the decoys used to be drawn into that window too, and since
+    v3.1.20260906 they are not - they go out at the size the config gives them,
+    which is smaller. That makes this bound looser than it was and leaves the
+    assertion measuring the same thing: what is being checked is that no
+    handshake-time packet outgrows a data packet, whichever of them is the
+    largest.
 
     It is asserted rather than assumed because the two ends of it are set on
     different pages: the window comes from the MTU and S4, the burst from S1-S3

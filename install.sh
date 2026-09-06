@@ -115,12 +115,12 @@ SHARE_DIR=/usr/local/share/awg-script
 # master. Override with --kmod-ref / --tools-ref.
 #
 # The two are pinned apart because upstream releases them apart: the module
-# has moved twice since v3.1.20260812 and the tools have not moved at all, so
-# the tools tag below is the newest there is rather than a copy of the one
-# above it. Nothing requires them to match - the module gained no netlink
-# attribute in either commit, which is the only thing the tools would need to
-# have learned about.
-KMOD_REF=v3.1.20260828
+# has moved three times since v3.1.20260812 and the tools have not moved at
+# all, so the tools tag below is the newest there is rather than a copy of the
+# one above it. Nothing requires them to match - the module gained no netlink
+# attribute in any of those commits, which is the only thing the tools would
+# need to have learned about.
+KMOD_REF=v3.1.20260906
 TOOLS_REF=v3.1.20260812
 
 # And the commit each of those tags stood at when this release was tested.
@@ -130,7 +130,7 @@ TOOLS_REF=v3.1.20260812
 # came with the bundle; a mismatch stops the install either way. Cleared when
 # --kmod-ref / --tools-ref name something else, because a commit recorded for
 # one ref proves nothing about another.
-KMOD_SHA=3c38e168beb7c60dec41dfe423d41555205a3dac
+KMOD_SHA=4569c4c67f3a57414969260cafbbd04694fbaae0
 TOOLS_SHA=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 
 while [[ $# -gt 0 ]]; do
@@ -761,9 +761,9 @@ HDRVER=$(sed -n 's|.*WIREGUARD_VERSION "\(.*\)".*|\1|p' \
 
 # What the module will report, which is not always what its own header says.
 # version.h is upstream's answer and was taken on trust here, but a tag can
-# land with that header left at the previous release's number: v3.1.20260828
-# carries "3.1.20260812", the string the tag before it carried, and the two
-# releases are six commits apart.
+# land with that header left at an earlier release's number: v3.1.20260906
+# carries "3.1.20260812", the string two tags back, and the two releases are
+# seven commits apart.
 #
 # Everything that can notice an upgrade compares those strings and nothing
 # else - kmod_version_line in lib/common.sh, the panel's running-vs-installed

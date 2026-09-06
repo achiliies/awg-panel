@@ -692,9 +692,16 @@ gen_advanced() {
     # to match on even when every byte inside it is random, and the one part of
     # the profile that padding drawn per server does not touch, because what is
     # constant is the length itself and not its value. The kernel appends a
-    # trailer of random length to each packet it sends, sized against what the
-    # path has already carried, so it never pushes one over the MTU and there is
-    # no budget to charge it against.
+    # trailer of random length to the handshakes it sends, sized against what
+    # the path has already carried, so it never pushes one over the MTU and
+    # there is no budget to charge it against.
+    #
+    # The handshakes and the cookie reply, and nothing else: v3.1.20260906
+    # stopped trailing the Jc junk and the I1-I5 decoys, which had been getting
+    # one on the same terms. That was working against the decoys, whose whole
+    # job is to be a well-formed packet of some other protocol - a trailer left
+    # each one a STUN or DNS message with bytes after its declared end, which
+    # is the one thing a filter that parses them would notice.
     #
     # It is safe to leave on only because gen_header_ranges draws H1-H4 narrow.
     # With the switch on, receive.c tests an arriving handshake for a minimum

@@ -899,9 +899,11 @@ covers the one thing the rest of the page does not: a handshake is the same
 length every time it is sent, which is a pattern to match on however random the
 bytes inside it are, and padding drawn per server does not change that — it
 moves the constant, it does not remove it. With the switch on, the kernel
-appends a trailer of random length to each packet, sized against what the path
-has already carried, so it can never push one over the MTU and there is no
-budget to charge it against.
+appends a trailer of random length to each handshake and each data packet,
+sized against what the path has already carried, so it can never push one over
+the MTU and there is no budget to charge it against. The junk and the decoys
+are not trailed at all — see *Why the bands stop where they do* below for why
+that matters.
 
 It is safe to leave on only because `H1`–`H4` are drawn narrow. A trailer makes
 a handshake's length unbounded, so the kernel stops testing an arriving one for
@@ -1024,7 +1026,11 @@ cost anything measurable.
   filter that parses it, and no real host speaks DNS, NTP, STUN and QUIC down a
   single UDP socket pair — a set that does is *more* distinctive than sending
   nothing. So one family is drawn per server and the whole set is built from it.
-  The count varies because a fixed five is a marker too.
+  The count varies because a fixed five is a marker too. They go on the wire at
+  exactly the length the config gives them: the module used to append a random
+  trailer to these as well, which left every decoy a message with bytes after
+  its own declared end, and AmneziaWG v3.1.20260906 — the release this
+  installer pins — stopped doing it.
 
 ### Reconfigure
 
