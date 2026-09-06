@@ -147,10 +147,11 @@ def handshake_packet(
     the response (send.c:158), each of the Jc junk packets (send.c:75) and each
     of the I1-I5 imitation packets (send.c:56). All four get `padding` random
     bytes in front. Only some of them get a trailer, and `trailer` is that
-    choice and not the RandomTrailers switch: the call site passes it as a
-    literal (socket.c:190) and the switch is read inside
-    wg_peer_skb_random_trailer (peer.h:98-107), so a packet grows by
-    get_random_u32_below(udp_window - size) bytes only when both are set.
+    choice and not the RandomTrailers switch: it is a parameter of that function
+    (socket.c:190) and each of the four call sites above passes it as a literal,
+    while the switch is read inside wg_peer_skb_random_trailer (peer.h:98-107),
+    so a packet grows by get_random_u32_below(udp_window - size) bytes only when
+    both are set.
 
     The two junk kinds pass false as of v3.1.20260906, and that is the whole of
     what the release changed. A decoy only works on a filter that parses it,

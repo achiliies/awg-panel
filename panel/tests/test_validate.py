@@ -1204,7 +1204,9 @@ def test_unknown_keys_are_ignored():
 
 
 def test_random_trailers_accepts_on():
-    """AmneziaWG 3.1 appends a random-length trailer to every packet when enabled."""
+    """AmneziaWG 3.1 appends a random-length trailer to each handshake and each
+    data packet when enabled; since v3.1.20260906 the junk and the decoys go out
+    at the size the config gives them."""
     assert check({"RandomTrailers": "on"}) == {}
 
 

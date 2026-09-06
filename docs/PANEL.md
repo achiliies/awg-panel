@@ -902,8 +902,8 @@ moves the constant, it does not remove it. With the switch on, the kernel
 appends a trailer of random length to each handshake and each data packet,
 sized against what the path has already carried, so it can never push one over
 the MTU and there is no budget to charge it against. The junk and the decoys
-are not trailed at all — see *Why the bands stop where they do* below for why
-that matters.
+are not trailed at all, which for the decoys is the whole point — see *Why the
+bands stop where they do* below.
 
 It is safe to leave on only because `H1`–`H4` are drawn narrow. A trailer makes
 a handshake's length unbounded, so the kernel stops testing an arriving one for

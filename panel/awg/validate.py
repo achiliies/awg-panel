@@ -974,7 +974,10 @@ _SPECS: list[ParamSpec] = [
         group="advanced",
         label="Random packet trailers",
         kind="bool",
-        help_short="Pads every packet to a random length. Needs AmneziaWG 3.1 on every client.",
+        help_short=(
+            "Pads each handshake and data packet to a random length."
+            " Needs AmneziaWG 3.1 on every client."
+        ),
         help_long=(
             "The length of an AmneziaWG packet follows from what is inside it, and a handshake "
             "is the same length every time - which is a pattern to match on even when every "
