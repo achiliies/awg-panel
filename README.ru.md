@@ -101,8 +101,8 @@ AmneziaWG — это двигатель. **AWG Panel — это все вокр�
 <td align="center" valign="top">
 <b>WG Tunnel</b><br><sub>многофункциональный · рекомендуемый</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=com.zaneschepke.wireguardautotunnel"><img src="assets/badges/google-play.svg" alt="Скачать WG Tunnel в Google Play" height="44"></a><br>
-<a href="https://github.com/wgtunnel/android/releases/tag/5.6.0"><img src="assets/badges/github.svg" alt="Скачать APK-файл WG Tunnel с GitHub" height="44"></a><br>
-<sub>APK v5.6.0</sub>
+<a href="https://github.com/wgtunnel/android/releases/tag/5.7.2"><img src="assets/badges/github.svg" alt="Скачать APK-файл WG Tunnel с GitHub" height="44"></a><br>
+<sub>APK v5.7.2</sub>
 <br><br>
 <b>AmneziaWG</b><br><sub>официальный · минималистичный</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=org.amnezia.awg"><img src="assets/badges/google-play.svg" alt="Скачать AmneziaWG в Google Play" height="44"></a><br>

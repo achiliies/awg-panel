@@ -123,8 +123,8 @@ Open the panel, click a client, scan the QR code — or download the `.conf` and
 <td align="center" valign="top">
 <b>WG Tunnel</b><br><sub>full-featured · recommended</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=com.zaneschepke.wireguardautotunnel"><img src="assets/badges/google-play.svg" alt="Get WG Tunnel on Google Play" height="44"></a><br>
-<a href="https://github.com/wgtunnel/android/releases/tag/5.6.0"><img src="assets/badges/github.svg" alt="Download the WG Tunnel APK from GitHub" height="44"></a><br>
-<sub>APK v5.6.0</sub>
+<a href="https://github.com/wgtunnel/android/releases/tag/5.7.2"><img src="assets/badges/github.svg" alt="Download the WG Tunnel APK from GitHub" height="44"></a><br>
+<sub>APK v5.7.2</sub>
 <br><br>
 <b>AmneziaWG</b><br><sub>official · minimal</sub><br><br>
 <a href="https://play.google.com/store/apps/details?id=org.amnezia.awg"><img src="assets/badges/google-play.svg" alt="Get AmneziaWG on Google Play" height="44"></a><br>
