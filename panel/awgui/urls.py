@@ -48,5 +48,6 @@ urlpatterns = [
     path(settings.BASE_PATH.lstrip("/"), include(panel_patterns)),
 ]
 
+handler400 = "awgui.views.bad_request"
 handler404 = "awgui.views.not_found"
 handler500 = "awgui.views.server_error"

@@ -52,6 +52,7 @@ needs to branch on the reason rather than the wording:
 | 403 | CSRF missing, locked out after repeated login failures, or an API token on a route it may not touch |
 | 404 | no such client, or a path outside the base path |
 | 409 | name already taken (`code: "name_in_use"`), or the address pool is exhausted |
+| 413 | the body is larger than the route takes: 2.5 MB, or 256 MB for `restore` |
 | 502 | `awg` / `awg-quick` failed; `detail` summarises its stderr |
 | 503 | `code: "not_configured"` — there is no server config here; or the config lock was held for longer than 30 s, in which case retry after the `Retry-After` seconds the answer carries |
 

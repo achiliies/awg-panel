@@ -266,6 +266,10 @@ MIDDLEWARE = [
     # below, so a request that arrived in the clear reaches no session, no login
     # and no static file.
     "awgui.middleware.HttpsOnlyMiddleware",
+    # Ahead of CsrfViewMiddleware, whose check reads a form body, and of every
+    # view: a body larger than its route takes is refused on Content-Length
+    # before a byte of it is read.
+    "awgui.middleware.RequestBodyLimitMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",

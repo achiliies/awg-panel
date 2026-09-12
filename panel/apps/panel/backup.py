@@ -48,6 +48,13 @@ ARCHIVE_DB = "db.sqlite3"
 
 NAME_FMT = "awg-backup-%Y%m%d-%H%M%S"
 
+# The largest archive a restore takes, checked against the upload's
+# Content-Length by awgui.middleware.RequestBodyLimitMiddleware before any of it
+# is read or spooled. Generous on purpose: refusing a real backup on the day it
+# is needed would be far worse than accepting a big one. It is here so that the
+# upload has a bound at all.
+MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+
 # The other process that writes both files a restore replaces. It has to be off
 # for the whole of one: it rewrites traffic.db every ten seconds, and its SQLite
 # connection is pinned to an inode that atomic_copy replaces - so left running

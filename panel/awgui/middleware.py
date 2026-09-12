@@ -1,10 +1,10 @@
 """Request-pipeline pieces that are specific to how the panel is deployed.
 
-Five concerns, kept apart because they fire at different points: which peer's
+Six concerns, kept apart because they fire at different points: which peer's
 forwarded headers are worth believing at all, the headers every response
 carries, the rule that nothing outside the secret base path exists, the refusal
-to answer in the clear once HTTPS is on, and the session lifetime the operator
-chose in the UI.
+to answer in the clear once HTTPS is on, the largest body a route will be
+handed, and the session lifetime the operator chose in the UI.
 """
 
 import importlib
@@ -21,6 +21,7 @@ from django.http import (
     HttpResponse,
     HttpResponsePermanentRedirect,
     HttpResponseRedirect,
+    JsonResponse,
 )
 
 log = logging.getLogger(__name__)
@@ -399,6 +400,76 @@ class HttpsOnlyMiddleware:
         log.warning("refused a %s that arrived over plain HTTP", request.method)
         return HttpResponse(
             b"This panel only answers over HTTPS.\n", status=400, content_type="text/plain"
+        )
+
+
+# The class attribute a view sets to take a larger body than Django's
+# DATA_UPLOAD_MAX_MEMORY_SIZE. Only restore does.
+MAX_BODY_ATTR = "max_request_body"
+
+_MEBIBYTE = 1024 * 1024
+
+
+class RequestBodyLimitMiddleware:
+    """Refuse a body larger than its route takes, before anything has read it.
+
+    DATA_UPLOAD_MAX_MEMORY_SIZE reads like that limit and is not one. Django
+    holds request.body and the plain fields of a form to it - and DRF 3.17.2
+    parses JSON and forms from request.body, so those are held to it as well -
+    but a file part is never counted. In a request past 2.5 MB it is streamed to
+    a temporary file instead, at whatever size the sender chose.
+
+    The login view is where that told. It is open to anyone, and the CSRF check
+    it runs reads request.POST before comparing a token, so a multipart POST
+    carrying only the cookie GET auth/session hands out was written to the
+    service's /tmp in full, and only then answered 403. That /tmp is memory
+    wherever it is a tmpfs, which Debian 13 makes it by default.
+
+    Content-Length is the whole test. Nothing has read the body when this runs,
+    so a refusal costs neither memory nor disk; gunicorn discards whatever the
+    client goes on sending instead of keeping it. A body sent with no length at
+    all is read by Django as empty, and there is nothing to bound.
+
+    In process_view rather than __call__, because the limit belongs to the
+    route: restore takes an archive, and everything else takes a form's worth of
+    JSON. That is still ahead of every read. CsrfViewMiddleware checks in
+    process_view too and stands later in the list, and the csrf_protect on the
+    login view runs inside the view itself.
+    """
+
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest) -> HttpResponse:
+        return self.get_response(request)
+
+    def process_view(
+        self,
+        request: HttpRequest,
+        view_func: Callable[..., HttpResponse],
+        view_args: tuple[Any, ...],
+        view_kwargs: dict[str, Any],
+    ) -> HttpResponse | None:
+        # DRF's as_view() records the class as `cls`, Django's as `view_class`.
+        view_class = getattr(view_func, "cls", None) or getattr(view_func, "view_class", None)
+        limit = getattr(view_class, MAX_BODY_ATTR, settings.DATA_UPLOAD_MAX_MEMORY_SIZE)
+        if limit is None:
+            return None
+        try:
+            length = int(request.META.get("CONTENT_LENGTH") or 0)
+        except ValueError:
+            # Django reads a body whose length it cannot parse as empty.
+            return None
+        if length <= limit:
+            return None
+
+        # The path is left out, as it is from HttpsOnlyMiddleware's line: it is
+        # the secret.
+        log.info("refused a %s body of %d bytes; the route takes %d", request.method, length, limit)
+        megabytes = f"{limit / _MEBIBYTE:.1f}".removesuffix(".0")
+        return JsonResponse(
+            {"detail": f"This route takes a request body of at most {megabytes} MB.", "errors": {}},
+            status=413,
         )
 
 

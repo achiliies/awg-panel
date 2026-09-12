@@ -14,6 +14,7 @@ import os
 import re
 from typing import Any
 
+from django.core.exceptions import RequestDataTooBig
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
 from rest_framework.exceptions import NotAuthenticated
@@ -88,6 +89,17 @@ def api_exception_handler(exc: Exception, context: dict[str, Any]) -> Response |
     if isinstance(exc, DjangoValidationError):
         # Password validators and model.full_clean() raise Django's, not DRF's.
         return _error(*_from_django_validation(exc))
+
+    if isinstance(exc, RequestDataTooBig):
+        # Nearly always refused on its Content-Length by RequestBodyLimitMiddleware
+        # before it is read. What can still get here is a body within its route's
+        # limit whose form fields alone are past Django's, and without this it was
+        # Django's HTML 400 - plus a traceback in the journal for every one.
+        log.info("refused a request body: %s", exc)
+        return _error(
+            "The request body is larger than the panel accepts.",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
 
     response = drf_exception_handler(exc, context)
     if response is None:

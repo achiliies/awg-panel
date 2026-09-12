@@ -177,6 +177,25 @@ def csrf_failure(request: HttpRequest, reason: str = "", template_name: str = ""
     )
 
 
+def bad_request(request: HttpRequest, exception: Exception | None = None) -> HttpResponse:
+    """400 for a request Django refused outside the reach of DRF's exception handler.
+
+    Django sends every SuspiciousOperation, BadRequest and malformed multipart
+    body that nothing before it answered here, so the cause varies. One is a
+    body Django will not parse at all - more form fields or files than
+    DATA_UPLOAD_MAX_NUMBER_FIELDS or DATA_UPLOAD_MAX_NUMBER_FILES allow - read
+    by something DRF's exception handler never sees, such as the CSRF check on
+    the login view. Others have nothing to do with the body: a Host that
+    AWG_PANEL_ALLOWED_HOSTS does not name, or a session deleted while its
+    request was still running. So the sentence is one that is true of all of
+    them. Django's own page is HTML, which the SPA cannot read and a script
+    does not expect.
+    """
+    if _is_api(request):
+        return JsonResponse({"detail": "The panel refused that request.", "errors": {}}, status=400)
+    return _plain_page("Bad request", "The panel refused that request.", status=400)
+
+
 def not_found(request: HttpRequest, exception: Exception | None = None) -> HttpResponse:
     """404 inside the base path: JSON for the API, a plain page for anything else."""
     if _is_api(request):

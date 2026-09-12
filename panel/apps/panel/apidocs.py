@@ -1374,6 +1374,7 @@ CATALOG: tuple[Op, ...] = (
         codes=(
             ("400", "The archive is not one of ours."),
             ("403", "An API token asked."),
+            ("413", "The archive is larger than 256 MB."),
         ),
         auth=AUTH_SESSION,
     ),

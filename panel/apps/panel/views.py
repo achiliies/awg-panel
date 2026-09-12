@@ -659,6 +659,9 @@ class RestoreView(APIView):
     """
 
     permission_classes = CREDENTIAL_PERMISSIONS
+    # An archive rather than a form, so past the 2.5 MB that
+    # awgui.middleware.RequestBodyLimitMiddleware holds every other route to.
+    max_request_body = backup.MAX_UPLOAD_BYTES
 
     def post(self, request: Request) -> Response:
         upload = request.FILES.get("file") or request.FILES.get("archive")
