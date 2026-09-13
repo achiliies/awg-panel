@@ -301,6 +301,9 @@ with_ipv6() {
 # Is this one of the three modes? Anything else in clients.env is a hand edit,
 # and callers fall back to blackhole rather than guessing: of the ways to be
 # wrong here, the one that leaks is the one worth not choosing by accident.
+#
+# "off" is not a mode either. It is what install.sh records for a tunnel that
+# carries no IPv6 by choice, and 1b there is the one place that reads it.
 subnet6_mode_valid() {
     case "${1:-}" in
         native|nat|blackhole) return 0 ;;
@@ -464,6 +467,13 @@ ipv6_in_kernel() {
     [[ -e "${AWG_ROOT_DIR:-}/proc/sys/net/ipv6/conf/default/disable_ipv6" ]]
 }
 
+# Is a number the kernel holds anything but zero? disable_ipv6 is an int and
+# every value except 0 switches IPv6 off - -1 included, which a test for a
+# positive number would read as on.
+sysctl_int_set() {
+    [[ "${1:-}" =~ ^-?[0-9]+$ ]] && (( 10#${1#-} != 0 ))
+}
+
 # Is IPv6 switched off for interfaces created from now on? A new interface takes
 # its disable_ipv6 from "default", so that is what awg-quick's interface starts
 # with. Writing "all" writes "default" as well, which is why a host switched off
@@ -471,59 +481,241 @@ ipv6_in_kernel() {
 ipv6_disabled_now() {
     local v
     v=$(cat "${AWG_ROOT_DIR:-}/proc/sys/net/ipv6/conf/default/disable_ipv6" 2>/dev/null) || return 1
-    [[ "$v" =~ ^[0-9]+$ ]] && (( 10#$v != 0 ))
+    sysctl_int_set "$v"
 }
 
-# The files `sysctl --system` applies, in the order it applies them: every
-# *.conf in these directories sorted by file name - a name in an earlier
-# directory hiding the same name in a later one - and /etc/sysctl.conf last.
+# Was the kernel started with one of the ipv6 module's switches on? "disable" is
+# ipv6.disable=1, which leaves no IPv6 at all. "disable_ipv6" is
+# ipv6.disable_ipv6=1, which is "default" above as every boot begins - so a host
+# switched on with `sysctl -w` passes ipv6_disabled_now and is off again after
+# the next reboot. No sysctl write moves either of these, which is what makes
+# them the answer about the next boot rather than about this one.
+ipv6_param_set() {
+    local v
+    v=$(cat "${AWG_ROOT_DIR:-}/sys/module/ipv6/parameters/${1:?parameter}" 2>/dev/null) || return 1
+    sysctl_int_set "$v"
+}
+
+# AWG_ROOT_DIR as readlink spells it, so it can be taken back off the front of a
+# path that has been through readlink.
+sysctl_root() {
+    [[ -z "${AWG_ROOT_DIR:-}" ]] || readlink -f -- "$AWG_ROOT_DIR"
+}
+
+# The files a sysctl run reads, in the order it reads them. Two runs decide what
+# the tunnel's interface is given, and they do not read the same files:
+#
+#   install  procps's `sysctl --system`, which install.sh runs just before it
+#            brings the tunnel up: every name ending in .conf in the five
+#            directories, hidden names included, and /etc/sysctl.conf after all
+#            of them.
+#   boot     systemd-sysctl, at every boot and again for each network interface
+#            as udev sees it appear: the same directories without the hidden
+#            names, and never /etc/sysctl.conf itself. Debian and Ubuntu link
+#            that file in as /etc/sysctl.d/99-sysctl.conf; trixie stopped.
+#
+# Both sort the names across the directories, and in both the first directory
+# holding a name hides that name in the ones after it - also when what it holds
+# is a link to /dev/null, which is the documented way to switch off a file a
+# package ships. The name is taken and nothing is read from it.
+#
+# Printed as the files they resolve to, so the /etc/sysctl.conf that procps
+# reaches both ways is one file in a message, and is still read twice.
 sysctl_system_files() {
-    local root="${AWG_ROOT_DIR:-}" d f name
+    local view="${1:?install or boot}" root d f name
     local -A seen=()
     local -a found=()
+    root=$(sysctl_root)
     for d in /etc/sysctl.d /run/sysctl.d /usr/local/lib/sysctl.d /usr/lib/sysctl.d /lib/sysctl.d; do
-        for f in "$root$d"/*.conf; do
+        for f in "$root$d"/*.conf "$root$d"/.*.conf; do
+            [[ -e "$f" || -L "$f" ]] || continue
             name="${f##*/}"
-            [[ -f "$f" && -z "${seen[$name]:-}" ]] || continue
+            [[ "$view" == install || "$name" != .* ]] || continue
+            [[ -z "${seen[$name]:-}" ]] || continue
             seen[$name]=1
-            found+=("${name}"$'\t'"${f}")
+            [[ -f "$f" ]] || continue
+            found+=("${name}"$'\t'"$(readlink -f -- "$f")")
         done
     done
     if (( ${#found[@]} )); then
         printf '%s\n' "${found[@]}" | LC_ALL=C sort -t $'\t' -k1,1 | cut -f2-
     fi
-    if [[ -f "$root/etc/sysctl.conf" ]]; then
-        printf '%s\n' "$root/etc/sysctl.conf"
+    if [[ "$view" == install && -f "$root/etc/sysctl.conf" ]]; then
+        readlink -f -- "$root/etc/sysctl.conf"
     fi
 }
 
-# Where the stored sysctl configuration leaves IPv6 switched off, as FILE:LINE,
-# or nothing when it does not. install.sh runs `sysctl --system` itself just
-# before it brings the tunnel up, and the machine runs it at every boot, so a
-# host somebody fixed with `sysctl -w` alone passes ipv6_disabled_now and still
-# fails at both. The last write to "all" or "default" is the one that counts,
-# for the reason given above.
-ipv6_disabled_at() {
+# What one of those runs leaves disable_ipv6 at, in the two places the tunnel's
+# interface takes it from: "default", which the interface copies as it is
+# created, and the interface's own key, which systemd-sysctl writes as udev sees
+# the interface appear - a race awg-quick's `ip -6 address add` loses either
+# way, before the write or after it. Printed as
+#
+#   default 1|0|-          what "default" is left at, - when nothing writes it
+#   iface 1|0|-            what IFACE's own key is written to, the same way
+#   at default|iface F:N   each line that writes a 1 to either, in order
+#
+# Read the way procps and systemd both read them, because whether a line counts
+# is the whole of the question:
+#
+#   - Later lines win, in the file order above. Writing "all" writes "default"
+#     too - the kernel does that, not sysctl - so "all = 0" switches the next
+#     interface back on as surely as "default = 0" does.
+#   - A key with * ? or [ in it is a glob. It writes every key it matches
+#     except one that some line names outright, wherever that line is, and
+#     glob(3) matches it, so * stops at a separator.
+#   - The key and the value are trimmed at both ends. A "-" in front of the key
+#     only asks not to hear about failing to set it, and "- net..." with a
+#     space after it names no key at all.
+#   - The kernel reads an int off the front of the value - decimal or 0x hex,
+#     with a sign - and refuses a value that does not start with one. A refused
+#     write changes nothing, so "yes" after "1" leaves it switched off.
+#   - A key is spelled with dots or with slashes, whichever comes first, and the
+#     other one is part of a name: net.ipv6.conf.eth0/100 is device eth0.100.
+#     Compared here in the slash spelling.
+ipv6_sysctl_state() {
+    local view="${1:?install or boot}" iface="${2:?interface}" root
     local -a files
-    mapfile -t files < <(sysctl_system_files)
-    (( ${#files[@]} )) || return 1
-    awk -v root="${AWG_ROOT_DIR:-}" '
+    root=$(sysctl_root)
+    mapfile -t files < <(sysctl_system_files "$view")
+    if (( ! ${#files[@]} )); then
+        printf 'default -\niface -\n'
+        return 0
+    fi
+    awk -v root="$root" -v iface="$iface" '
+        function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+        function slashed(k,    i, c, out) {
+            if (index(k, "/") && (!index(k, ".") || index(k, "/") < index(k, "."))) return k
+            out = ""
+            for (i = 1; i <= length(k); i++) {
+                c = substr(k, i, 1)
+                if (c == ".") c = "/"
+                else if (c == "/") c = "."
+                out = out c
+            }
+            return out
+        }
+        function glob_re(g,    i, c, j, out) {
+            out = "^"
+            for (i = 1; i <= length(g); i++) {
+                c = substr(g, i, 1)
+                if (c == "*") out = out "[^/]*"
+                else if (c == "?") out = out "[^/]"
+                else if (c == "[" && (j = index(substr(g, i + 1), "]")) > 1) {
+                    c = substr(g, i + 1, j - 1)
+                    if (substr(c, 1, 1) == "!") c = "^" substr(c, 2)
+                    out = out "[" c "]"
+                    i += j
+                }
+                else if (index("\\^$.|+(){}[]", c)) out = out "\\" c
+                else out = out c
+            }
+            return out "$"
+        }
+        BEGIN {
+            ALL = "net/ipv6/conf/all/disable_ipv6"
+            DEF = "net/ipv6/conf/default/disable_ipv6"
+            DEV = "net/ipv6/conf/" iface "/disable_ipv6"
+        }
         {
             line = $0
-            # A leading "-" only says to ignore a failure to set the key.
-            sub(/^[[:space:]]*-?[[:space:]]*/, "", line)
+            sub(/^[[:space:]]+/, "", line)
+            c = substr(line, 1, 1)
+            if (c == "#" || c == ";") next
+            if (c == "-") line = substr(line, 2)
             eq = index(line, "=")
-            if (line ~ /^[#;]/ || eq == 0) next
-            key = substr(line, 1, eq - 1); val = substr(line, eq + 1)
-            gsub(/[[:space:]]/, "", key); gsub(/[[:space:]]/, "", val)
-            gsub(/\//, ".", key)
-            if (key != "net.ipv6.conf.all.disable_ipv6" &&
-                key != "net.ipv6.conf.default.disable_ipv6") next
-            off = (val ~ /^[0-9]+$/ && val + 0 != 0)
+            if (eq < 2) next
+            key = substr(line, 1, eq - 1)
+            if (key ~ /^[[:space:]]/) next
+            key = slashed(trim(key))
+            val = trim(substr(line, eq + 1))
+            sub(/[[:space:]].*/, "", val)
+            if (val !~ /^-?([0-9]+|0[xX][0-9a-fA-F]+)$/) next
+            sub(/^-/, "", val)
+            sub(/^0[xX]/, "", val)
+            n++
+            K[n] = key
+            V[n] = (val ~ /[1-9a-fA-F]/)
             at = FILENAME
-            if (root != "" && index(at, root) == 1) at = substr(at, length(root) + 1)
-            at = at ":" FNR
+            if (root != "" && index(at, root "/") == 1) at = substr(at, length(root) + 1)
+            AT[n] = at ":" FNR
+            if (index(key, "*") || index(key, "?") || index(key, "[")) G[n] = 1
+            else named[key] = 1
         }
-        END { if (off) print at; exit !off }
+        END {
+            d = "-"; f = "-"; m = 0
+            for (i = 1; i <= n; i++) {
+                if (G[i]) {
+                    re = glob_re(K[i])
+                    td = (!(ALL in named) && ALL ~ re) || (!(DEF in named) && DEF ~ re)
+                    tf = !(DEV in named) && DEV ~ re
+                } else {
+                    td = (K[i] == ALL || K[i] == DEF)
+                    tf = (K[i] == DEV)
+                }
+                if (td) { d = V[i]; if (V[i]) out[++m] = "at default " AT[i] }
+                if (tf) { f = V[i]; if (V[i]) out[++m] = "at iface " AT[i] }
+            }
+            print "default " d
+            print "iface " f
+            for (i = 1; i <= m; i++) print out[i]
+        }
     ' "${files[@]}"
+}
+
+# Everything that would keep IFACE from taking an IPv6 address, one reason to a
+# line - or nothing, and 1, when there is none:
+#
+#   kernel disabled   the kernel was started with ipv6.disable=1
+#   kernel absent     it has no IPv6 at all: not built in, or not loaded
+#   at FILE:LINE      a stored line that switches it off, in whichever of the
+#                     two runs above reads it
+#   now               off right now, and the `sysctl --system` install.sh runs
+#                     before the tunnel comes up does not switch it back on
+#   boot              ipv6.disable_ipv6=1 at boot, and nothing systemd-sysctl
+#                     reads switches it back on
+#
+# All of them rather than the first one found, so that one round of fixing is
+# enough. A host with IPv6 switched off on its kernel command line very often
+# has it switched off in sysctl.conf as well, and hearing about the second from
+# a refusal after the reboot that fixed the first is a poor way to be told.
+#
+# A live value the stored files set back to on is not a reason. install.sh's own
+# `sysctl --system` puts it back before the tunnel exists, and a host fixed on
+# disk but not yet re-read is not one to turn away.
+ipv6_off_reasons() {
+    local iface="${1:?interface}" view kind a b
+    local install_def="-" boot_def="-" boot_dev="-"
+    local -a install_at=() boot_at=() dev_at=() why=()
+    local -A said=()
+
+    for view in install boot; do
+        while read -r kind a b; do
+            case "$view $kind $a" in
+                "install default "*) install_def=$a ;;
+                "boot default "*)    boot_def=$a ;;
+                "boot iface "*)      boot_dev=$a ;;
+                "install at default") install_at+=("at $b") ;;
+                "boot at default")   boot_at+=("at $b") ;;
+                "boot at iface")     dev_at+=("at $b") ;;
+            esac
+        done < <(ipv6_sysctl_state "$view" "$iface")
+    done
+
+    if ! ipv6_in_kernel; then
+        if ipv6_param_set disable; then why+=("kernel disabled"); else why+=("kernel absent"); fi
+    fi
+    [[ "$install_def" != 1 ]] || why+=("${install_at[@]}")
+    [[ "$boot_def" != 1 ]]    || why+=("${boot_at[@]}")
+    [[ "$boot_dev" != 1 ]]    || why+=("${dev_at[@]}")
+    if [[ "$install_def" != 0 ]] && ipv6_disabled_now; then why+=("now"); fi
+    if [[ "$boot_def" != 0 ]] && ipv6_param_set disable_ipv6; then why+=("boot"); fi
+
+    (( ${#why[@]} )) || return 1
+    for a in "${why[@]}"; do
+        [[ -z "${said[$a]:-}" ]] || continue
+        said[$a]=1
+        printf '%s\n' "$a"
+    done
+    return 0
 }

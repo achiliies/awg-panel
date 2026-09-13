@@ -209,10 +209,14 @@ Options:
                   its own address. "off" restores that behaviour; it is
                   there for hosts that genuinely need it and it says so
                   loudly every time it runs.
-                  Both of these settle a tunnel's IPv6 once. A re-run adds
-                  IPv6 to a server that has none, and reports them as
-                  ignored on one that already has it - the prefix is in
-                  every config already issued, and only --fresh renumbers.
+                  Every mode but "off" needs IPv6 switched on in the
+                  kernel, and the installer stops before it builds
+                  anything on a host where it is not.
+                  Both of these settle a tunnel's IPv6 once. A re-run keeps
+                  a tunnel installed with "off" that way, adds IPv6 to any
+                  other server that has none, and reports them as ignored
+                  on one that already has it - the prefix is in every
+                  config already issued, and only --fresh renumbers.
   --client NAME   first client name    (default: client1)
   --mtu N         tunnel MTU           (default: 1372)
   --lang CODE     en | ru              (default: asked once, then en)
@@ -287,6 +291,15 @@ MTU_MAX=$(( OBFS_MTU_BUDGET - OBFS_HEADER_NONCE ))
 valid_endpoint() { [[ "$1" =~ ^[A-Za-z0-9.:_-]+$ ]]; }
 [[ -z "$ENDPOINT" ]] || valid_endpoint "$ENDPOINT" \
     || die "--endpoint '${ENDPOINT}' is not an address or a host name"
+# --ipv6 with the rest of them, and ahead of 1c for a reason of its own: 1c asks
+# the kernel about every mode that is not "off", so "--ipv6 OFF" on a host with
+# IPv6 switched off was turned away for the switch - with advice to pass the
+# flag that had just been mistyped - and never told about the typo.
+case "$IPV6_MODE" in
+    auto|off) ;;
+    *) subnet6_mode_valid "$IPV6_MODE" \
+           || die "--ipv6 '${IPV6_MODE}' is not one of: native, nat, blackhole, auto, off" ;;
+esac
 
 # --iface may have moved us off the default the library assumed.
 SERVER_CONF="$CONF_DIR/${IFACE}.conf"
@@ -544,6 +557,24 @@ if [[ -f "$CONF_DIR/${IFACE}.conf" && $FRESH -eq 0 ]]; then
         SUBNET6=auto
         IPV6_MODE=auto
     fi
+    # And an "off" is kept. clients.env records one for a tunnel installed with
+    # --ipv6 off, and without the record an upgrade could not tell that tunnel
+    # from one installed before IPv6 was carried, so it added IPv6 to both: the
+    # migration further down for the second, a choice undone for the first. On
+    # a host with IPv6 switched off that made every update a refusal in 1c,
+    # because awg-update and awg-menu type no flags and the refusal's way out
+    # was a flag.
+    #
+    # Only "off" spelled out. A blank mode is what every server from before the
+    # record looks like - one installed with --ipv6 off back then included, and
+    # that one is migrated like the rest. Only when nothing was typed, which is
+    # how a tunnel is given IPv6 later on. And only on a tunnel with no IPv6,
+    # because one that has some is not off whatever the file says.
+    if (( ! SUBNET6_GIVEN )) && ! conf_has_ipv6 \
+       && [[ "$(sed -n 's/^[[:space:]]*SUBNET6_MODE="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+                "$CONF_DIR/clients.env" 2>/dev/null | tail -1)" == off ]]; then
+        IPV6_MODE=off
+    fi
     PORT=$(iface_get ListenPort)
     MTU=$(iface_get MTU)
     parse_cidr "$(iface_get Address)" \
@@ -590,38 +621,110 @@ fi
 # host answers on, which is the admin's call; a tunnel without IPv6 is the leak
 # lib/subnet6.sh exists to stop.
 #
-# After 1b, because that is where an --ipv6 this tunnel cannot take is cleared:
-# from here on, IPV6_MODE is off exactly when the tunnel will carry no IPv6.
-IPV6_FIX="" IPV6_AT=""
-if [[ "$IPV6_MODE" != "off" ]]; then
-    if ! ipv6_in_kernel; then
-        IPV6_FIX=$(t "To turn it on, remove ipv6.disable=1 from GRUB_CMDLINE_LINUX in
-     /etc/default/grub, then run:
-       update-grub && reboot" \
-                     "Чтобы включить, уберите ipv6.disable=1 из GRUB_CMDLINE_LINUX в
-     /etc/default/grub и выполните:
-       update-grub && reboot")
-    elif IPV6_AT=$(ipv6_disabled_at) || ipv6_disabled_now; then
-        IPV6_FIX="
-       sysctl -w net.ipv6.conf.all.disable_ipv6=0
-       sysctl -w net.ipv6.conf.default.disable_ipv6=0"
-        if [[ -n "$IPV6_AT" ]]; then
-            IPV6_FIX=$(t "To turn it on, remove the disable_ipv6 lines from ${IPV6_AT%:*}, then run:${IPV6_FIX}" \
-                         "Чтобы включить, удалите строки disable_ipv6 из ${IPV6_AT%:*} и выполните:${IPV6_FIX}")
-        else
-            IPV6_FIX=$(t "To turn it on, run:${IPV6_FIX}" "Чтобы включить, выполните:${IPV6_FIX}")
-        fi
+# After 1b, because that is where an --ipv6 this tunnel cannot take is cleared
+# and a recorded "off" is taken up: from here on, IPV6_MODE is off exactly when
+# the tunnel will carry no IPv6.
+
+# Say what is switching it off and stop. The argument is what ipv6_off_reasons
+# printed, with "applied" added by the check after step 7's `sysctl --system`,
+# which is the one that sees a setting lib/subnet6.sh did not read.
+#
+# One bullet to a fix, all of them at once, in the order they want doing. A line
+# in a file under /etc is the admin's to comment out; one in a file a package
+# owns is masked instead, because the package's next upgrade would put an edit
+# back. `sysctl -w` is only offered when the running value needs it, and after
+# the files, which would otherwise switch it off again at the next boot.
+#
+# The way out follows the config rather than whether this run is an upgrade.
+# --fresh makes a run over an existing config a fresh install, and one told
+# "--ipv6 off" without --fresh came back through 1b, had the flag ignored, and
+# was refused again.
+ipv6_refuse() {
+    local kind arg f kernel="" applied=0 now=0 boot=0 fix="" alt
+    local -a lines=() masks=()
+    while read -r kind arg; do
+        case "$kind" in
+            kernel)  kernel=$arg ;;
+            applied) applied=1 ;;
+            now)     now=1 ;;
+            boot)    boot=1 ;;
+            at)
+                if [[ "$arg" == /etc/* ]]; then
+                    lines+=("$arg")
+                else
+                    f="${arg%:*}"; f="${f##*/}"
+                    [[ " ${masks[*]-} " == *" ${f} "* ]] || masks+=("$f")
+                fi ;;
+        esac
+    done <<<"$1"
+
+    case "$kernel" in
+        disabled)
+            fix+=$'\n'"$(t "     - take ipv6.disable=1 off the kernel command line and reboot. The first
+       command shows where it is set, and the second applies the change:
+         grep -rnsE 'ipv6[. ]disable=1' /etc/default/grub /etc/default/grub.d /etc/modprobe.d
+         update-grub && reboot" \
+                           "     - уберите ipv6.disable=1 из командной строки ядра и перезагрузитесь.
+       Где он задан, покажет первая команда, а вторая применит изменение:
+         grep -rnsE 'ipv6[. ]disable=1' /etc/default/grub /etc/default/grub.d /etc/modprobe.d
+         update-grub && reboot")" ;;
+        absent)
+            fix+=$'\n'"$(t "     - load IPv6 into this kernel:
+         modprobe ipv6
+       If that fails, the kernel was built without IPv6, or a file in
+       /etc/modprobe.d keeps the module from loading." \
+                           "     - загрузите IPv6 в это ядро:
+         modprobe ipv6
+       Если это не сработает, ядро собрано без IPv6 или загрузку модуля
+       запрещает файл в /etc/modprobe.d.")" ;;
+    esac
+    if (( ${#lines[@]} )); then
+        fix+=$'\n'"$(t "     - comment out these lines (a # at the start of each):" \
+                       "     - закомментируйте эти строки (# в начале каждой):")"
+        for arg in "${lines[@]}"; do fix+=$'\n'"         ${arg}"; done
     fi
-fi
-if [[ -n "$IPV6_FIX" ]]; then
-    if (( EXISTING )) && conf_has_ipv6; then
-        IPV6_ALT=$(t "Or install with --fresh --ipv6 off, but then clients' IPv6 will leak,
+    if (( ${#masks[@]} )); then
+        fix+=$'\n'"$(t "     - switch these files off rather than editing them. A package owns them,
+       and its next upgrade would put an edit back:" \
+                       "     - отключите эти файлы, а не правьте их: они принадлежат пакету, и его
+       следующее обновление вернуло бы правку:")"
+        for f in "${masks[@]}"; do fix+=$'\n'"         ln -s /dev/null /etc/sysctl.d/${f}"; done
+    fi
+    if (( applied )); then
+        fix+=$'\n'"$(t "     - find the setting that switched it off. sysctl --system applied it just
+       now, in a form the check before the build did not read:
+         grep -rns disable_ipv6 /etc/sysctl.conf /etc/sysctl.d /run/sysctl.d /usr/local/lib/sysctl.d /usr/lib/sysctl.d /lib/sysctl.d" \
+                       "     - найдите настройку, которая его отключила. sysctl --system только что её
+       применил, а проверка перед сборкой не смогла её прочитать:
+         grep -rns disable_ipv6 /etc/sysctl.conf /etc/sysctl.d /run/sysctl.d /usr/local/lib/sysctl.d /usr/lib/sysctl.d /lib/sysctl.d")"
+    fi
+    if (( boot )); then
+        fix+=$'\n'"$(t "     - take ipv6.disable_ipv6=1 off the kernel command line, or every boot
+       switches IPv6 off again. The first command shows where it is set, and
+       the second applies the change from the next boot:
+         grep -rnsE 'ipv6[. ]disable_ipv6=1' /etc/default/grub /etc/default/grub.d /etc/modprobe.d
+         update-grub" \
+                       "     - уберите ipv6.disable_ipv6=1 из командной строки ядра, иначе каждая
+       загрузка снова отключит IPv6. Где он задан, покажет первая команда, а
+       вторая применит изменение со следующей загрузки:
+         grep -rnsE 'ipv6[. ]disable_ipv6=1' /etc/default/grub /etc/default/grub.d /etc/modprobe.d
+         update-grub")"
+    fi
+    if (( now )); then
+        fix+=$'\n'"$(t "     - switch it on in the running system:" \
+                       "     - включите его в работающей системе:")"
+        fix+=$'\n'"         sysctl -w net.ipv6.conf.all.disable_ipv6=0"
+        fix+=$'\n'"         sysctl -w net.ipv6.conf.default.disable_ipv6=0"
+    fi
+
+    if conf_has_ipv6; then
+        alt=$(t "Or install with --fresh --ipv6 off, but then clients' IPv6 will leak,
      and existing clients will need new configs." \
-                     "Или установите с --fresh --ipv6 off, но тогда IPv6 клиентов будет утекать,
+                "Или установите с --fresh --ipv6 off, но тогда IPv6 клиентов будет утекать,
      а существующим клиентам понадобятся новые конфигурации.")
     else
-        IPV6_ALT=$(t "Or install with --ipv6 off, but then clients' IPv6 will leak." \
-                     "Или установите с --ipv6 off, но тогда IPv6 клиентов будет утекать.")
+        alt=$(t "Or install with --ipv6 off, but then clients' IPv6 will leak." \
+                "Или установите с --ipv6 off, но тогда IPv6 клиентов будет утекать.")
     fi
     die "$(t "IPv6 is turned off on this server.
 
@@ -629,21 +732,25 @@ if [[ -n "$IPV6_FIX" ]]; then
      internet. Otherwise clients' IPv6 traffic skips the VPN and shows
      their real IP address.
 
-     ${IPV6_FIX}
+     To turn it on:${fix}
      Then run the installer again.
 
-     ${IPV6_ALT}" \
+     ${alt}" \
              "IPv6 отключён на этом сервере.
 
      Он должен быть включён для защиты от утечек, даже если у сервера нет
      IPv6-интернета. Иначе IPv6-трафик клиентов идёт мимо VPN и раскрывает
      их настоящий IP-адрес.
 
-     ${IPV6_FIX}
+     Чтобы включить его:${fix}
      Затем запустите установку ещё раз.
 
-     ${IPV6_ALT}")"
-fi
+     ${alt}")"
+}
+
+IPV6_WHY=""
+[[ "$IPV6_MODE" == off ]] || IPV6_WHY=$(ipv6_off_reasons "$IFACE") || true
+[[ -z "$IPV6_WHY" ]] || ipv6_refuse "$IPV6_WHY"
 
 # ------------------------------------------------- which kernel, and when
 # Two questions this script has to keep apart: which kernel it is compiling
@@ -1626,8 +1733,7 @@ else
             SUBNET6_MODE=blackhole
         fi
     else
-        subnet6_mode_valid "$IPV6_MODE" || die \
-            "--ipv6 '${IPV6_MODE}' is not one of: native, nat, blackhole, auto, off"
+        # A mode --ipv6 named, checked with the other flags at the top.
         SUBNET6_MODE="$IPV6_MODE"
     fi
 
@@ -1845,7 +1951,7 @@ ipv6_migrate_conf() {
 
     if [[ -f "$env" ]]; then
         env_set_kv "$env" SUBNET6_CIDR "$SUBNET6_CIDR" '# blank = this tunnel carries no IPv6'
-        env_set_kv "$env" SUBNET6_MODE "$SUBNET6_MODE" '# native | nat | blackhole'
+        env_set_kv "$env" SUBNET6_MODE "$SUBNET6_MODE" '# native | nat | blackhole | off'
         # A full tunnel becomes a full tunnel. Anything else in there is a
         # split-tunnel route list somebody chose, and choosing it again for
         # them would be a worse surprise than leaving it: a client that routes
@@ -2004,6 +2110,12 @@ if (( EXISTING )); then
         if (( ENDPOINT_MOVED )); then
             sed -i "s|^ENDPOINT_HOST=.*|ENDPOINT_HOST=\"${ENDPOINT}\"|" "$CONF_DIR/clients.env"
         fi
+        # And an "off" written down, for the run --ipv6 off was typed on. The
+        # next upgrade types nothing, and without this it would take the tunnel
+        # for one from before IPv6 and add it back - see 1b.
+        if [[ "$IPV6_MODE" == off ]]; then
+            env_set_kv "$CONF_DIR/clients.env" SUBNET6_MODE off '# native | nat | blackhole | off'
+        fi
     fi
     # The other thing an upgrade touches, and the reason this one is not
     # "config untouched": a server installed before IPv6 was carried is issuing
@@ -2139,9 +2251,18 @@ if [[ -f "$CONF_DIR/clients.env" ]]; then
     sed -i -e "s|^ENDPOINT_HOST=.*|ENDPOINT_HOST=\"${ENDPOINT}\"|" \
            -e "s|^CLIENT_MTU=.*|CLIENT_MTU=\"${MTU}\"|" "$CONF_DIR/clients.env"
     env_set_subnet "$CONF_DIR/clients.env"
+    # The IPv6 pair as well, which this run has just decided afresh. Left alone,
+    # a `--fresh --ipv6 off` kept the replaced tunnel's prefix and mode here, and
+    # the next upgrade read them as IPv6 to put back rather than as the "off"
+    # that was typed.
+    env_set_kv "$CONF_DIR/clients.env" SUBNET6_CIDR "$SUBNET6_CIDR" '# blank = this tunnel carries no IPv6'
+    env_set_kv "$CONF_DIR/clients.env" SUBNET6_MODE "${SUBNET6_MODE:-off}" '# native | nat | blackhole | off'
     echo "$(t "  kept existing clients.env (backed up)" \
               "  сохранён существующий clients.env (создана резервная копия)")"
 else
+    # SUBNET6_MODE is "off", not blank, for a tunnel installed with --ipv6 off.
+    # Blank is what a server from before IPv6 looks like, which an upgrade
+    # migrates; "off" is a choice, which it keeps - see 1b.
     cat > "$CONF_DIR/clients.env" <<EOF
 # AmneziaWG client defaults. Shell syntax - every value must be QUOTED.
 ENDPOINT_HOST="${ENDPOINT}"     # blank = auto-detect
@@ -2151,7 +2272,7 @@ CLIENT_MTU="${MTU}"
 CLIENT_ALLOWED_IPS="${CLIENT_ALLOWED_DEFAULT}"  # "${SUBNET_CIDR}" for split tunnel
 SUBNET_CIDR="${SUBNET_CIDR}"
 SUBNET6_CIDR="${SUBNET6_CIDR}"   # blank = this tunnel carries no IPv6
-SUBNET6_MODE="${SUBNET6_MODE}"   # native | nat | blackhole
+SUBNET6_MODE="${SUBNET6_MODE:-off}"   # native | nat | blackhole | off
 KEEPALIVE="25"
 EOF
 fi
@@ -2179,7 +2300,21 @@ fi # fresh-install configuration
         fi
     fi
 } > /etc/sysctl.d/99-amneziawg.conf
-sysctl -q --system
+# -e, so a key this kernel does not have is not this run's failure. `sysctl
+# --system` reads every other file on the machine as well, stock Ubuntu ships
+# net.ipv6 keys in 10-ipv6-privacy.conf, and on a kernel with no IPv6 - the host
+# 1c offers --ipv6 off to - procps exits 1 over each of them, which errexit
+# turned into an install that died here, after the build, over settings nobody
+# asked it to make. It hides nothing of this file's: ip_forward is in every
+# kernel, and the IPv6 keys are only written on a host 1c found IPv6 on.
+sysctl -q -e --system
+# Then the kernel itself, now that every file has been applied. 1c read those
+# files the way procps and systemd-sysctl do, and this is what catches a setting
+# it read differently - here, with its own message, rather than as "IPv6 is
+# disabled on this device" from awg-quick in step 10.
+if [[ -n "$SUBNET6_MODE" ]] && ipv6_disabled_now; then
+    ipv6_refuse "$(printf 'applied\n'; ipv6_off_reasons "$IFACE" || true; printf 'now\n')"
+fi
 if [[ -n "$SUBNET6_MODE" ]]; then
     echo "$(t "  ip_forward and IPv6 forwarding enabled" \
               "  включены ip_forward и пересылка IPv6")"

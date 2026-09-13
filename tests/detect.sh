@@ -187,9 +187,30 @@ existing_read() {
         . '$REPO/lib/subnet6.sh'
         CONF_DIR='$WORK'; SERVER_CONF='$conf'
         $(awk '/^conf_ipv6_mode\(\) \{/,/^\}/' "$INSTALLER")
-        EXISTING=1 SUBNET6_GIVEN=0 SUBNET6=auto IPV6_MODE=auto
+        EXISTING=1 SUBNET6_GIVEN=0 SUBNET6=auto IPV6_MODE='${3:-auto}'
         $EXISTING_READ
         printf '%s %s\n' \"\$SUBNET6\" \"\$IPV6_MODE\""
+}
+
+# And the "off" 1b takes up out of clients.env on an upgrade that types no
+# flags - which is every upgrade awg-update and awg-menu run.
+KEPT_OFF=$(sed -n '/# And an "off" is kept/,/^    fi$/p' "$INSTALLER")
+[[ -n "$KEPT_OFF" && "$KEPT_OFF" == *"IPV6_MODE=off"* ]] || {
+    echo "  FAIL  could not find where 1b keeps a recorded --ipv6 off in install.sh" >&2
+    echo "        (the anchors in this test need updating)" >&2
+    exit 1; }
+
+kept_off() {
+    local conf="$WORK/$1.conf" given="$2" dir="$WORK/kept"
+    rm -rf "$dir"; mkdir -p "$dir"
+    [[ "$3" == none ]] || printf '%s\n' "$3" > "$dir/clients.env"
+    bash -c "
+        $(conf_reader "$conf")
+        CONF_DIR='$dir'
+        SUBNET6_GIVEN=$given
+        IPV6_MODE=auto
+        $KEPT_OFF
+        printf '%s\n' \"\$IPV6_MODE\""
 }
 
 # --------------------------------------------------------------------- cases
@@ -322,6 +343,24 @@ SUBNET6_MODE="sometimes"')" "2a01:4f8:c17:1::/64 native"
 ck "a v4-only config leaves both to be derived" \
    "$(existing_read v4 'SUBNET6_CIDR=""
 SUBNET6_MODE=""')" "auto auto"
+ck "and leaves an off that 1b took up as off" \
+   "$(existing_read v4 'SUBNET6_CIDR=""
+SUBNET6_MODE="off"' off)" "auto off"
+
+printf '\n== an "off" an upgrade keeps ==\n'
+ck "a tunnel installed with --ipv6 off stays off" \
+   "$(kept_off v4 0 'SUBNET6_CIDR=""   # blank = this tunnel carries no IPv6
+SUBNET6_MODE="off"   # native | nat | blackhole | off')" "off"
+# Blank is every server from before the record, and those are the servers the
+# migration is for.
+ck "a blank mode is still migrated" \
+   "$(kept_off v4 0 'SUBNET6_CIDR=""
+SUBNET6_MODE=""')" "auto"
+ck "and so is a server with no clients.env at all" "$(kept_off v4 0 none)" "auto"
+ck "a flag typed on this run wins over the record" \
+   "$(kept_off v4 1 'SUBNET6_MODE="off"')" "auto"
+ck "and a tunnel that has IPv6 is not off whatever the file says" \
+   "$(kept_off nat 0 'SUBNET6_MODE="off"')" "auto"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 exit $(( FAIL > 0 ))
