@@ -626,8 +626,8 @@ fi
 # the tunnel will carry no IPv6.
 
 # Say what is switching it off and stop. The argument is what ipv6_off_reasons
-# printed, with "applied" added by the check after step 7's `sysctl --system`,
-# which is the one that sees a setting lib/subnet6.sh did not read.
+# printed, with "applied" added by the check after this script's own `sysctl
+# --system`, which is the one that sees a setting lib/subnet6.sh did not read.
 #
 # One bullet to a fix, all of them at once, in the order they want doing. A line
 # in a file under /etc is the admin's to comment out; one in a file a package
@@ -2102,6 +2102,77 @@ install -d -m 700 "$CONF_DIR" "$CONF_DIR/clients"
 lang_save "$LANG_CHOICE" || warn "$(t "could not record the language in ${LANG_FILE}; awg-menu will open in English" \
                                       "не удалось записать язык в ${LANG_FILE}; awg-menu будет открываться на английском")"
 
+# Ahead of both branches below, because either one rewrites ${IFACE}.conf. A
+# refusal runs restore_iface_on_failure, which brings the tunnel back up on
+# whatever that file holds, and ipv6_refuse offers the way out the file allows,
+# so both have to find it as this run did. This used to come after the write.
+# An upgrade's ipv6_migrate_conf, which keeps no copy, had by then put IPv6 in
+# the file: the tunnel came back to a kernel that refused it and stayed down,
+# and the way out became --fresh - a new server key, and a new config for every
+# client. A --fresh run left the tunnel it was replacing down the same way, and
+# on a new host left a config behind that made the next run an upgrade.
+#
+# A tunnel that already carried IPv6 still stays down when it is this run's
+# `sysctl --system` that switched IPv6 off. Its config is as it was, though, and
+# the re-run the refusal asks for brings it back.
+{
+    echo "net.ipv4.ip_forward = 1"
+    if [[ -n "$SUBNET6_MODE" ]]; then
+        # On in every mode, blackhole included. Netfilter's FORWARD chain is
+        # only reached from inside the kernel's forwarding path, so with
+        # forwarding off the REJECT rule never runs and the packet is discarded
+        # without an ICMPv6 error - which is exactly the silent drop that mode
+        # exists to avoid.
+        echo "net.ipv6.conf.all.forwarding = 1"
+        if [[ -n "$IPV6_ACCEPT_RA_FIX" ]]; then
+            # See ipv6_default_from_ra() in lib/subnet6.sh: a forwarding host
+            # stops honouring Router Advertisements, and this machine's default
+            # route came from one. Without this it would keep working until the
+            # advertisement's lifetime ran out and then quietly disappear, long
+            # after the installer said it was done.
+            #
+            # Slashes rather than dots, because an interface name can have a dot
+            # in it - eth0.100 is VLAN 100 on eth0 - and in the dotted spelling
+            # procps and systemd-sysctl both read every dot as a separator and
+            # look for a key under eth0/100 that is not there.
+            echo "net/ipv6/conf/${IPV6_ACCEPT_RA_FIX}/accept_ra = 2"
+        fi
+    fi
+} > /etc/sysctl.d/99-amneziawg.conf
+# -e, so a key this kernel does not have is not this run's failure. `sysctl
+# --system` reads every other file on the machine as well, stock Ubuntu ships
+# net.ipv6 keys in 10-ipv6-privacy.conf, and on a kernel with no IPv6 - the host
+# 1c offers --ipv6 off to - procps exits 1 over each of them, which errexit
+# turned into an install that died here, after the build, over settings nobody
+# asked it to make. It hides nothing of this file's: ip_forward is in every
+# kernel, the IPv6 keys are only written on a host 1c found IPv6 on, and the
+# one naming an interface is spelled so that a VLAN's name still reaches it.
+sysctl -q -e --system
+# Then the kernel itself, now that every file has been applied. 1c read those
+# files the way procps and systemd-sysctl do, and this is what catches a setting
+# it read differently - here, with its own message, rather than as "IPv6 is
+# disabled on this device" from awg-quick in step 10.
+if [[ -n "$SUBNET6_MODE" ]] && ipv6_disabled_now; then
+    ipv6_refuse "$(printf 'applied\n'; ipv6_off_reasons "$IFACE" || true; printf 'now\n')"
+fi
+if [[ -n "$SUBNET6_MODE" ]]; then
+    echo "$(t "  ip_forward and IPv6 forwarding enabled" \
+              "  включены ip_forward и пересылка IPv6")"
+    if [[ -n "$IPV6_ACCEPT_RA_FIX" ]]; then
+        echo "$(t "  accept_ra=2 on ${IPV6_ACCEPT_RA_FIX}, so forwarding does not cost this host its own default route" \
+                  "  accept_ra=2 на ${IPV6_ACCEPT_RA_FIX}, чтобы пересылка не стоила этой машине её собственного маршрута по умолчанию")"
+    fi
+    # Cheap, and the one failure worth catching immediately: if the route has
+    # already gone, everything downstream would come up looking healthy and
+    # carry nothing.
+    if [[ "$SUBNET6_MODE" != "blackhole" ]] && ! ip -6 route show default | grep -q .; then
+        warn "$(t "this host has no IPv6 default route after enabling forwarding; IPv6 will not leave the server" \
+                  "после включения пересылки у машины нет маршрута IPv6 по умолчанию; IPv6 не выйдет за пределы сервера")"
+    fi
+else
+    echo "$(t "  ip_forward enabled" "  включён ip_forward")"
+fi
+
 if (( EXISTING )); then
     step "$(t "Keeping the existing configuration" "Сохранение существующей конфигурации")"
     echo "$(t "  obfuscation profile, ${IFACE}.conf and clients untouched" \
@@ -2301,64 +2372,6 @@ chmod 600 "$CONF_DIR/clients.env"
 echo "$(t "  wrote ${CONF_DIR}/${IFACE}.conf" "  файл ${CONF_DIR}/${IFACE}.conf записан")"
 
 fi # fresh-install configuration
-
-{
-    echo "net.ipv4.ip_forward = 1"
-    if [[ -n "$SUBNET6_MODE" ]]; then
-        # On in every mode, blackhole included. Netfilter's FORWARD chain is
-        # only reached from inside the kernel's forwarding path, so with
-        # forwarding off the REJECT rule never runs and the packet is discarded
-        # without an ICMPv6 error - which is exactly the silent drop that mode
-        # exists to avoid.
-        echo "net.ipv6.conf.all.forwarding = 1"
-        if [[ -n "$IPV6_ACCEPT_RA_FIX" ]]; then
-            # See ipv6_default_from_ra() in lib/subnet6.sh: a forwarding host
-            # stops honouring Router Advertisements, and this machine's default
-            # route came from one. Without this it would keep working until the
-            # advertisement's lifetime ran out and then quietly disappear, long
-            # after the installer said it was done.
-            #
-            # Slashes rather than dots, because an interface name can have a dot
-            # in it - eth0.100 is VLAN 100 on eth0 - and in the dotted spelling
-            # procps and systemd-sysctl both read every dot as a separator and
-            # look for a key under eth0/100 that is not there.
-            echo "net/ipv6/conf/${IPV6_ACCEPT_RA_FIX}/accept_ra = 2"
-        fi
-    fi
-} > /etc/sysctl.d/99-amneziawg.conf
-# -e, so a key this kernel does not have is not this run's failure. `sysctl
-# --system` reads every other file on the machine as well, stock Ubuntu ships
-# net.ipv6 keys in 10-ipv6-privacy.conf, and on a kernel with no IPv6 - the host
-# 1c offers --ipv6 off to - procps exits 1 over each of them, which errexit
-# turned into an install that died here, after the build, over settings nobody
-# asked it to make. It hides nothing of this file's: ip_forward is in every
-# kernel, the IPv6 keys are only written on a host 1c found IPv6 on, and the
-# one naming an interface is spelled so that a VLAN's name still reaches it.
-sysctl -q -e --system
-# Then the kernel itself, now that every file has been applied. 1c read those
-# files the way procps and systemd-sysctl do, and this is what catches a setting
-# it read differently - here, with its own message, rather than as "IPv6 is
-# disabled on this device" from awg-quick in step 10.
-if [[ -n "$SUBNET6_MODE" ]] && ipv6_disabled_now; then
-    ipv6_refuse "$(printf 'applied\n'; ipv6_off_reasons "$IFACE" || true; printf 'now\n')"
-fi
-if [[ -n "$SUBNET6_MODE" ]]; then
-    echo "$(t "  ip_forward and IPv6 forwarding enabled" \
-              "  включены ip_forward и пересылка IPv6")"
-    if [[ -n "$IPV6_ACCEPT_RA_FIX" ]]; then
-        echo "$(t "  accept_ra=2 on ${IPV6_ACCEPT_RA_FIX}, so forwarding does not cost this host its own default route" \
-                  "  accept_ra=2 на ${IPV6_ACCEPT_RA_FIX}, чтобы пересылка не стоила этой машине её собственного маршрута по умолчанию")"
-    fi
-    # Cheap, and the one failure worth catching immediately: if the route has
-    # already gone, everything downstream would come up looking healthy and
-    # carry nothing.
-    if [[ "$SUBNET6_MODE" != "blackhole" ]] && ! ip -6 route show default | grep -q .; then
-        warn "$(t "this host has no IPv6 default route after enabling forwarding; IPv6 will not leave the server" \
-                  "после включения пересылки у машины нет маршрута IPv6 по умолчанию; IPv6 не выйдет за пределы сервера")"
-    fi
-else
-    echo "$(t "  ip_forward enabled" "  включён ip_forward")"
-fi
 
 # ------------------------------------------------- 8. management tools
 step "$(t "Installing the management tools" "Установка инструментов управления")"

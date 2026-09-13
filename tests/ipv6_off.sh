@@ -276,6 +276,16 @@ is "and the kernel is asked again once it has run" \
 # VLAN's eth0.100 is still one name rather than eth0 and 100.
 is "accept_ra is written with slashes, so a VLAN's dot stays in its name" \
    "$(grep -cF 'echo "net/ipv6/conf/${IPV6_ACCEPT_RA_FIX}/accept_ra = 2"' "$INSTALL")" "1"
+# And the kernel is asked before either branch writes the server config. A
+# refusal hands the tunnel to restore_iface_on_failure, which brings it up on
+# whatever that file holds, and ipv6_refuse offers the way out the file allows.
+# Asked after an upgrade had put IPv6 in it, the tunnel stayed down and the way
+# out took --fresh.
+refused=$(grep -nF "ipv6_refuse \"\$(printf 'applied" "$INSTALL" | head -1 | cut -d: -f1)
+written=$(grep -nE '^[[:space:]]*(ipv6_migrate_conf$|cat > "\$CONF_DIR/\$\{IFACE\}\.conf")' "$INSTALL" \
+          | head -1 | cut -d: -f1)
+is "and before an upgrade or a fresh install writes the server config" \
+   "$(( ${refused:-999999} < ${written:-0} ))" "1"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]
