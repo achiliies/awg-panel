@@ -446,3 +446,84 @@ ipv6_host_online() {
 ipv6_default_from_ra() {
     ip -6 route show default 2>/dev/null | grep -q 'proto ra'
 }
+
+# --------------------------------------------- whether the kernel allows it
+#
+# Every mode puts an IPv6 address on the tunnel interface - blackhole too, on a
+# host with no IPv6 anywhere - and a kernel with IPv6 switched off refuses it
+# with "IPv6 is disabled on this device", after which awg-quick deletes the
+# interface. That is a different state from a host with no IPv6 upstream, and
+# nothing above tells the two apart: both have no global address and no default
+# route. These do.
+#
+# AWG_ROOT_DIR is the seam tests/subnet6.sh points at a directory of its own.
+
+# Does this kernel have IPv6 at all? One booted with ipv6.disable=1, or built
+# without it, has no net.ipv6 sysctls, and no sysctl can turn it back on.
+ipv6_in_kernel() {
+    [[ -e "${AWG_ROOT_DIR:-}/proc/sys/net/ipv6/conf/default/disable_ipv6" ]]
+}
+
+# Is IPv6 switched off for interfaces created from now on? A new interface takes
+# its disable_ipv6 from "default", so that is what awg-quick's interface starts
+# with. Writing "all" writes "default" as well, which is why a host switched off
+# under either name reads as off here.
+ipv6_disabled_now() {
+    local v
+    v=$(cat "${AWG_ROOT_DIR:-}/proc/sys/net/ipv6/conf/default/disable_ipv6" 2>/dev/null) || return 1
+    [[ "$v" =~ ^[0-9]+$ ]] && (( 10#$v != 0 ))
+}
+
+# The files `sysctl --system` applies, in the order it applies them: every
+# *.conf in these directories sorted by file name - a name in an earlier
+# directory hiding the same name in a later one - and /etc/sysctl.conf last.
+sysctl_system_files() {
+    local root="${AWG_ROOT_DIR:-}" d f name
+    local -A seen=()
+    local -a found=()
+    for d in /etc/sysctl.d /run/sysctl.d /usr/local/lib/sysctl.d /usr/lib/sysctl.d /lib/sysctl.d; do
+        for f in "$root$d"/*.conf; do
+            name="${f##*/}"
+            [[ -f "$f" && -z "${seen[$name]:-}" ]] || continue
+            seen[$name]=1
+            found+=("${name}"$'\t'"${f}")
+        done
+    done
+    if (( ${#found[@]} )); then
+        printf '%s\n' "${found[@]}" | LC_ALL=C sort -t $'\t' -k1,1 | cut -f2-
+    fi
+    if [[ -f "$root/etc/sysctl.conf" ]]; then
+        printf '%s\n' "$root/etc/sysctl.conf"
+    fi
+}
+
+# Where the stored sysctl configuration leaves IPv6 switched off, as FILE:LINE,
+# or nothing when it does not. install.sh runs `sysctl --system` itself just
+# before it brings the tunnel up, and the machine runs it at every boot, so a
+# host somebody fixed with `sysctl -w` alone passes ipv6_disabled_now and still
+# fails at both. The last write to "all" or "default" is the one that counts,
+# for the reason given above.
+ipv6_disabled_at() {
+    local -a files
+    mapfile -t files < <(sysctl_system_files)
+    (( ${#files[@]} )) || return 1
+    awk -v root="${AWG_ROOT_DIR:-}" '
+        {
+            line = $0
+            # A leading "-" only says to ignore a failure to set the key.
+            sub(/^[[:space:]]*-?[[:space:]]*/, "", line)
+            eq = index(line, "=")
+            if (line ~ /^[#;]/ || eq == 0) next
+            key = substr(line, 1, eq - 1); val = substr(line, eq + 1)
+            gsub(/[[:space:]]/, "", key); gsub(/[[:space:]]/, "", val)
+            gsub(/\//, ".", key)
+            if (key != "net.ipv6.conf.all.disable_ipv6" &&
+                key != "net.ipv6.conf.default.disable_ipv6") next
+            off = (val ~ /^[0-9]+$/ && val + 0 != 0)
+            at = FILENAME
+            if (root != "" && index(at, root) == 1) at = substr(at, length(root) + 1)
+            at = at ":" FNR
+        }
+        END { if (off) print at; exit !off }
+    ' "${files[@]}"
+}

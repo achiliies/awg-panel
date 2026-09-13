@@ -577,6 +577,74 @@ else
     subnet_derive
 fi
 
+# ------------------------------------------------- 1c. IPv6 in the kernel
+# Every mode but off puts an IPv6 address on the tunnel interface - blackhole
+# included, on a host with no IPv6 upstream - and a kernel with IPv6 switched
+# off refuses it. awg-quick deletes the interface over that, and it used to
+# happen at the very end: after the dependencies, the module build, DKMS and
+# the panel, with the config already written - which also turned the obvious
+# retry, --ipv6 off, into one 1b ignores. Asked here, before anything is built
+# or written.
+#
+# Refused rather than repaired, either way. Switching IPv6 on changes what this
+# host answers on, which is the admin's call; a tunnel without IPv6 is the leak
+# lib/subnet6.sh exists to stop.
+#
+# After 1b, because that is where an --ipv6 this tunnel cannot take is cleared:
+# from here on, IPV6_MODE is off exactly when the tunnel will carry no IPv6.
+IPV6_FIX="" IPV6_AT=""
+if [[ "$IPV6_MODE" != "off" ]]; then
+    if ! ipv6_in_kernel; then
+        IPV6_FIX=$(t "To turn it on, remove ipv6.disable=1 from GRUB_CMDLINE_LINUX in
+     /etc/default/grub, then run:
+       update-grub && reboot" \
+                     "Чтобы включить, уберите ipv6.disable=1 из GRUB_CMDLINE_LINUX в
+     /etc/default/grub и выполните:
+       update-grub && reboot")
+    elif IPV6_AT=$(ipv6_disabled_at) || ipv6_disabled_now; then
+        IPV6_FIX="
+       sysctl -w net.ipv6.conf.all.disable_ipv6=0
+       sysctl -w net.ipv6.conf.default.disable_ipv6=0"
+        if [[ -n "$IPV6_AT" ]]; then
+            IPV6_FIX=$(t "To turn it on, remove the disable_ipv6 lines from ${IPV6_AT%:*}, then run:${IPV6_FIX}" \
+                         "Чтобы включить, удалите строки disable_ipv6 из ${IPV6_AT%:*} и выполните:${IPV6_FIX}")
+        else
+            IPV6_FIX=$(t "To turn it on, run:${IPV6_FIX}" "Чтобы включить, выполните:${IPV6_FIX}")
+        fi
+    fi
+fi
+if [[ -n "$IPV6_FIX" ]]; then
+    if (( EXISTING )) && conf_has_ipv6; then
+        IPV6_ALT=$(t "Or install with --fresh --ipv6 off, but then clients' IPv6 will leak,
+     and existing clients will need new configs." \
+                     "Или установите с --fresh --ipv6 off, но тогда IPv6 клиентов будет утекать,
+     а существующим клиентам понадобятся новые конфигурации.")
+    else
+        IPV6_ALT=$(t "Or install with --ipv6 off, but then clients' IPv6 will leak." \
+                     "Или установите с --ipv6 off, но тогда IPv6 клиентов будет утекать.")
+    fi
+    die "$(t "IPv6 is turned off on this server.
+
+     It has to be on to stop IPv6 leaks, even if this server has no IPv6
+     internet. Otherwise clients' IPv6 traffic skips the VPN and shows
+     their real IP address.
+
+     ${IPV6_FIX}
+     Then run the installer again.
+
+     ${IPV6_ALT}" \
+             "IPv6 отключён на этом сервере.
+
+     Он должен быть включён для защиты от утечек, даже если у сервера нет
+     IPv6-интернета. Иначе IPv6-трафик клиентов идёт мимо VPN и раскрывает
+     их настоящий IP-адрес.
+
+     ${IPV6_FIX}
+     Затем запустите установку ещё раз.
+
+     ${IPV6_ALT}")"
+fi
+
 # ------------------------------------------------- which kernel, and when
 # Two questions this script has to keep apart: which kernel it is compiling
 # for now, and which kernel this machine will be running the next time anyone

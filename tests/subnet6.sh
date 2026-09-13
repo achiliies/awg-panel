@@ -164,5 +164,84 @@ addr "fd12:3456:789a::1/48"
 route "fd12:3456:789a::/48"
 is "a ULA block is not treated as routed" "$(ipv6_routed_block eth0 || echo none)" "none"
 
+# ------------------------------------------------ IPv6 switched off in the kernel
+#
+# Against a directory standing in for / rather than this machine's own /proc and
+# /etc, for the same reason as the stubbed ip above.
+ROOT="$WORK/root"
+export AWG_ROOT_DIR="$ROOT"
+sysroot() {
+    rm -rf "$ROOT"
+    mkdir -p "$ROOT/proc/sys/net/ipv6/conf/default"
+    printf '%s\n' "${1:-0}" > "$ROOT/proc/sys/net/ipv6/conf/default/disable_ipv6"
+}
+sysfile() { mkdir -p "$(dirname "$ROOT$1")"; cat > "$ROOT$1"; }
+in_kernel() { ipv6_in_kernel && echo yes || echo no; }
+off_now()   { ipv6_disabled_now && echo off || echo on; }
+off_at()    { ipv6_disabled_at || echo none; }
+
+printf '\n== a stock kernel ==\n'
+sysroot
+is "has IPv6"                        "$(in_kernel)" "yes"
+is "switched on"                     "$(off_now)" "on"
+is "with nothing stored to change that" "$(off_at)" "none"
+
+printf '\n== a kernel booted with ipv6.disable=1 ==\n'
+sysroot; rm -rf "$ROOT/proc/sys/net/ipv6"
+is "has no IPv6 at all"              "$(in_kernel)" "no"
+
+printf '\n== disable_ipv6 set now ==\n'
+sysroot 1
+is "is off"                          "$(off_now)" "off"
+
+printf '\n== the lines a "disable IPv6" VPS image ships, switched back on with sysctl -w ==\n'
+sysroot 0
+sysfile /etc/sysctl.conf <<'EOF'
+net.ipv4.ip_forward = 0
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+EOF
+is "reads as on now"                 "$(off_now)" "on"
+is "and off once sysctl --system runs, at the last line" "$(off_at)" "/etc/sysctl.conf:3"
+
+printf '\n== how the files are read ==\n'
+sysroot
+sysfile /etc/sysctl.d/10-noipv6.conf <<<'-net/ipv6/conf/all/disable_ipv6=1'
+is "the slash spelling and a leading '-'" "$(off_at)" "/etc/sysctl.d/10-noipv6.conf:1"
+
+sysroot
+sysfile /etc/sysctl.conf <<'EOF'
+#net.ipv6.conf.all.disable_ipv6 = 1
+; net.ipv6.conf.default.disable_ipv6 = 1
+EOF
+is "a commented line is not a setting" "$(off_at)" "none"
+
+sysroot
+sysfile /usr/lib/sysctl.d/10-off.conf <<<'net.ipv6.conf.all.disable_ipv6 = 1'
+sysfile /etc/sysctl.d/90-on.conf      <<<'net.ipv6.conf.default.disable_ipv6 = 0'
+is "a later file that switches it back on wins" "$(off_at)" "none"
+
+sysroot
+sysfile /etc/sysctl.d/90-on.conf      <<<'net.ipv6.conf.all.disable_ipv6 = 0'
+sysfile /usr/lib/sysctl.d/95-off.conf <<<'net.ipv6.conf.default.disable_ipv6 = 1'
+is "files are applied by name, not by directory" "$(off_at)" "/usr/lib/sysctl.d/95-off.conf:1"
+
+sysroot
+sysfile /usr/lib/sysctl.d/50-net.conf <<<'net.ipv6.conf.all.disable_ipv6 = 1'
+sysfile /etc/sysctl.d/50-net.conf     <<<'net.ipv4.ip_forward = 1'
+is "a name in /etc hides the same name under /usr/lib" "$(off_at)" "none"
+
+sysroot
+sysfile /etc/sysctl.conf            <<<'net.ipv6.conf.all.disable_ipv6 = 1'
+sysfile /etc/sysctl.d/99-zz-on.conf <<<'net.ipv6.conf.all.disable_ipv6 = 0'
+is "/etc/sysctl.conf is applied last" "$(off_at)" "/etc/sysctl.conf:1"
+
+unset AWG_ROOT_DIR
+
+# And asked where it saves anything: before the first step that builds.
+asked=$(grep -n 'ipv6_in_kernel' "$REPO/install.sh" | head -1 | cut -d: -f1)
+built=$(grep -nF 'step "$(t "Installing build dependencies"' "$REPO/install.sh" | head -1 | cut -d: -f1)
+is "install.sh asks before it builds anything" "$(( ${asked:-999999} < ${built:-0} ))" "1"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]
