@@ -213,6 +213,34 @@ kept_off() {
         printf '%s\n' \"\$IPV6_MODE\""
 }
 
+# And what clients.env is left saying, which is what the panel reads. Two places
+# write its IPv6 half: an upgrade that records --ipv6 off, and a --fresh over a
+# clients.env it keeps.
+WRITTEN_OFF=$(sed -n '/# And an "off" written down/,/^        fi$/p' "$INSTALLER")
+KEPT_ENV=$(awk '/# The IPv6 pair as well, which this run/ { p = 1 }
+                /kept existing clients.env/ { p = 0 } p' "$INSTALLER")
+[[ "$WRITTEN_OFF" == *"SUBNET6_CIDR"* && "$KEPT_ENV" == *"with_ipv6"* ]] || {
+    echo "  FAIL  could not find where install.sh writes the IPv6 half of clients.env" >&2
+    echo "        (the anchors in this test need updating)" >&2
+    exit 1; }
+
+# CLIENT_ALLOWED_IPS|SUBNET6_CIDR|SUBNET6_MODE as bash reads the file back, once
+# BLOCK has run over ENV with this run's IPV6_MODE, SUBNET6_MODE and SUBNET6_CIDR.
+env_after() {
+    local block="$1" dir="$WORK/env"
+    rm -rf "$dir"; mkdir -p "$dir"
+    printf '%s\n' "$2" > "$dir/clients.env"
+    bash -c "
+        . '$REPO/lib/subnet.sh'
+        . '$REPO/lib/subnet6.sh'
+        $(awk '/^env_set_kv\(\) \{/,/^\}/' "$INSTALLER")
+        CONF_DIR='$dir' SUBNET_CIDR=10.13.0.0/24
+        IPV6_MODE='$3' SUBNET6_MODE='$4' SUBNET6_CIDR='$5'
+        $block
+        . '$dir/clients.env'
+        printf '%s|%s|%s\n' \"\$CLIENT_ALLOWED_IPS\" \"\$SUBNET6_CIDR\" \"\$SUBNET6_MODE\""
+}
+
 # --------------------------------------------------------------------- cases
 # mawk is what these servers have and gawk is what a developer has, the same
 # reason tests/hooks.sh runs everything twice.
@@ -361,6 +389,33 @@ ck "a flag typed on this run wins over the record" \
    "$(kept_off v4 1 'SUBNET6_MODE="off"')" "auto"
 ck "and a tunnel that has IPv6 is not off whatever the file says" \
    "$(kept_off nat 0 'SUBNET6_MODE="off"')" "auto"
+
+printf '\n== what clients.env is left saying ==\n'
+# An upgrade that records off, over a mirror still holding a prefix - restored
+# from a backup, or left by a --fresh from before the pair was rewritten.
+STALE='CLIENT_ALLOWED_IPS="0.0.0.0/0"
+SUBNET6_CIDR="fd7a:1e5f:22::/64"   # blank = this tunnel carries no IPv6
+SUBNET6_MODE="nat"   # native | nat | blackhole | off'
+ck "an upgrade to off leaves no prefix behind for the panel to hand out" \
+   "$(env_after "$WRITTEN_OFF" "$STALE" off '' '')" "0.0.0.0/0||off"
+ck "and one that did not type off leaves the file alone" \
+   "$(env_after "$WRITTEN_OFF" "$STALE" auto '' '')" "0.0.0.0/0|fd7a:1e5f:22::/64|nat"
+# --fresh over a kept clients.env from a tunnel that carried no IPv6. The pair is
+# written, and a full tunnel has to start routing IPv6 with it, or every client
+# the panel issues sends IPv6 outside the tunnel.
+V4_ENV='CLIENT_ALLOWED_IPS="0.0.0.0/0"  # "10.13.0.0/24" for split tunnel
+SUBNET6_CIDR=""   # blank = this tunnel carries no IPv6
+SUBNET6_MODE="off"   # native | nat | blackhole | off'
+ck "a --fresh that gives the tunnel IPv6 routes IPv6 through it" \
+   "$(env_after "$KEPT_ENV" "$V4_ENV" auto nat fd7a:1e5f:22::/64)" \
+   "0.0.0.0/0, ::/0|fd7a:1e5f:22::/64|nat"
+ck "and leaves a split tunnel somebody chose as it was" \
+   "$(env_after "$KEPT_ENV" 'CLIENT_ALLOWED_IPS="10.13.0.0/24"' auto nat fd7a:1e5f:22::/64)" \
+   "10.13.0.0/24|fd7a:1e5f:22::/64|nat"
+KEPT=$(env_after "$KEPT_ENV" 'CLIENT_ALLOWED_IPS="0.0.0.0/0, ::/0"
+SUBNET6_CIDR="fd7a:1e5f:22::/64"
+SUBNET6_MODE="nat"' off '' '')
+ck "a --fresh --ipv6 off records off, with no prefix" "${KEPT#*|}" "|off"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 exit $(( FAIL > 0 ))

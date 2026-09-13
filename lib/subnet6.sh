@@ -459,7 +459,7 @@ ipv6_default_from_ra() {
 # nothing above tells the two apart: both have no global address and no default
 # route. These do.
 #
-# AWG_ROOT_DIR is the seam tests/subnet6.sh points at a directory of its own.
+# AWG_ROOT_DIR is the seam tests/ipv6_off.sh points at a directory of its own.
 
 # Does this kernel have IPv6 at all? One booted with ipv6.disable=1, or built
 # without it, has no net.ipv6 sysctls, and no sysctl can turn it back on.
@@ -565,8 +565,9 @@ sysctl_system_files() {
 #     except one that some line names outright, wherever that line is, and
 #     glob(3) matches it, so * stops at a separator.
 #   - The key and the value are trimmed at both ends. A "-" in front of the key
-#     only asks not to hear about failing to set it, and "- net..." with a
-#     space after it names no key at all.
+#     only asks not to hear about failing to set it. A space after that "-" is
+#     where the two part: procps keeps it as part of the key, which then names
+#     nothing, and systemd-sysctl strips it and applies the line.
 #   - The kernel reads an int off the front of the value - decimal or 0x hex,
 #     with a sign - and refuses a value that does not start with one. A refused
 #     write changes nothing, so "yes" after "1" leaves it switched off.
@@ -582,7 +583,7 @@ ipv6_sysctl_state() {
         printf 'default -\niface -\n'
         return 0
     fi
-    awk -v root="$root" -v iface="$iface" '
+    awk -v root="$root" -v iface="$iface" -v view="$view" '
         function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
         function slashed(k,    i, c, out) {
             if (index(k, "/") && (!index(k, ".") || index(k, "/") < index(k, "."))) return k
@@ -626,8 +627,9 @@ ipv6_sysctl_state() {
             eq = index(line, "=")
             if (eq < 2) next
             key = substr(line, 1, eq - 1)
-            if (key ~ /^[[:space:]]/) next
+            if (view == "install" && key ~ /^[[:space:]]/) next
             key = slashed(trim(key))
+            if (key == "") next
             val = trim(substr(line, eq + 1))
             sub(/[[:space:]].*/, "", val)
             if (val !~ /^-?([0-9]+|0[xX][0-9a-fA-F]+)$/) next

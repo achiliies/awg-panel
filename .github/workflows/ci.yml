@@ -40,7 +40,7 @@ jobs:
         run: |
           for f in install.sh build.sh fetch-sources.sh get.sh tests/hooks.sh \
                    tests/obfs.sh tests/deps.sh tests/basepath.sh tests/panel.sh \
-                   tests/subnet6.sh tests/recovery.sh tests/shaper.sh \
+                   tests/subnet6.sh tests/ipv6_off.sh tests/recovery.sh tests/shaper.sh \
                    tests/uninstall.sh tests/acme.sh tests/bundle.sh \
                    tests/prompt.sh tests/detect.sh tests/power.sh \
                    tests/update.sh tests/i18n.sh tests/ports.sh tests/get.sh \
@@ -57,7 +57,7 @@ jobs:
         run: |
           shellcheck -x -S warning install.sh build.sh fetch-sources.sh get.sh \
             tests/hooks.sh tests/obfs.sh tests/deps.sh tests/basepath.sh \
-            tests/panel.sh \
+            tests/panel.sh tests/ipv6_off.sh \
             tests/subnet6.sh tests/recovery.sh tests/shaper.sh tests/uninstall.sh \
             tests/acme.sh tests/bundle.sh tests/prompt.sh tests/detect.sh \
             tests/power.sh tests/update.sh tests/i18n.sh tests/ports.sh \
@@ -78,6 +78,14 @@ jobs:
       # awg/subnet6.py needs nothing but the standard library.
       - name: The two IPv6 derivations agree
         run: tests/subnet6.sh
+
+      # Every IPv6 mode needs IPv6 switched on in the kernel, and the installer
+      # works that out from /proc, /sys and the machine's sysctl files before it
+      # builds anything. Driven against a stand-in root, so it needs nothing
+      # here but bash and awk - which is also why it is not in subnet6.sh, whose
+      # Python half skips the whole file where python3 is missing.
+      - name: A host with IPv6 switched off is refused before the build
+        run: tests/ipv6_off.sh
 
       # awg0.conf is read twice - by awk for the menu and the installer, by
       # awg/conf.py for the panel - and the two disagreed about an indented

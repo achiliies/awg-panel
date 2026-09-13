@@ -699,16 +699,20 @@ ipv6_refuse() {
          grep -rns disable_ipv6 /etc/sysctl.conf /etc/sysctl.d /run/sysctl.d /usr/local/lib/sysctl.d /usr/lib/sysctl.d /lib/sysctl.d")"
     fi
     if (( boot )); then
-        fix+=$'\n'"$(t "     - take ipv6.disable_ipv6=1 off the kernel command line, or every boot
-       switches IPv6 off again. The first command shows where it is set, and
-       the second applies the change from the next boot:
+        fix+=$'\n'"$(t "     - ipv6.disable_ipv6=1 is on the kernel command line. Either switch IPv6
+       back on for new interfaces from a file, which needs no reboot:
+         echo 'net.ipv6.conf.default.disable_ipv6 = 0' > /etc/sysctl.d/60-ipv6-on.conf
+       or take the parameter off the command line, which does. The first of
+       these shows where it is set:
          grep -rnsE 'ipv6[. ]disable_ipv6=1' /etc/default/grub /etc/default/grub.d /etc/modprobe.d
-         update-grub" \
-                       "     - уберите ipv6.disable_ipv6=1 из командной строки ядра, иначе каждая
-       загрузка снова отключит IPv6. Где он задан, покажет первая команда, а
-       вторая применит изменение со следующей загрузки:
+         update-grub && reboot" \
+                       "     - в командной строке ядра задан ipv6.disable_ipv6=1. Либо включите IPv6
+       для новых интерфейсов через файл, без перезагрузки:
+         echo 'net.ipv6.conf.default.disable_ipv6 = 0' > /etc/sysctl.d/60-ipv6-on.conf
+       либо уберите параметр из командной строки, и тогда нужна перезагрузка.
+       Где он задан, покажет первая из этих команд:
          grep -rnsE 'ipv6[. ]disable_ipv6=1' /etc/default/grub /etc/default/grub.d /etc/modprobe.d
-         update-grub")"
+         update-grub && reboot")"
     fi
     if (( now )); then
         fix+=$'\n'"$(t "     - switch it on in the running system:" \
@@ -2112,8 +2116,12 @@ if (( EXISTING )); then
         fi
         # And an "off" written down, for the run --ipv6 off was typed on. The
         # next upgrade types nothing, and without this it would take the tunnel
-        # for one from before IPv6 and add it back - see 1b.
+        # for one from before IPv6 and add it back - see 1b. The prefix goes
+        # blank with it: 1b lets off through only for a tunnel with no IPv6, and
+        # a prefix left in this mirror is one the panel would still hand
+        # addresses out of.
         if [[ "$IPV6_MODE" == off ]]; then
+            env_set_kv "$CONF_DIR/clients.env" SUBNET6_CIDR "" '# blank = this tunnel carries no IPv6'
             env_set_kv "$CONF_DIR/clients.env" SUBNET6_MODE off '# native | nat | blackhole | off'
         fi
     fi
@@ -2257,6 +2265,19 @@ if [[ -f "$CONF_DIR/clients.env" ]]; then
     # that was typed.
     env_set_kv "$CONF_DIR/clients.env" SUBNET6_CIDR "$SUBNET6_CIDR" '# blank = this tunnel carries no IPv6'
     env_set_kv "$CONF_DIR/clients.env" SUBNET6_MODE "${SUBNET6_MODE:-off}" '# native | nat | blackhole | off'
+    # And the routes that go with a tunnel that now carries IPv6. A full tunnel
+    # kept from one that carried none claims only 0.0.0.0/0, the panel copies
+    # that into every client it issues, and each of them sends IPv6 outside the
+    # tunnel. The rule an upgrade applies in ipv6_migrate_conf: a full tunnel
+    # becomes a full tunnel, and a split tunnel somebody chose stays as it was.
+    if [[ -n "$SUBNET6_MODE" ]]; then
+        OLD_ALLOWED=$(sed -n 's/^[[:space:]]*CLIENT_ALLOWED_IPS="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+                      "$CONF_DIR/clients.env" | tail -1)
+        if needs_ipv6 "$OLD_ALLOWED"; then
+            env_set_kv "$CONF_DIR/clients.env" CLIENT_ALLOWED_IPS "$(with_ipv6 "$OLD_ALLOWED")" \
+                "# \"${SUBNET_CIDR}\" for split tunnel"
+        fi
+    fi
     echo "$(t "  kept existing clients.env (backed up)" \
               "  сохранён существующий clients.env (создана резервная копия)")"
 else
@@ -2296,7 +2317,12 @@ fi # fresh-install configuration
             # route came from one. Without this it would keep working until the
             # advertisement's lifetime ran out and then quietly disappear, long
             # after the installer said it was done.
-            echo "net.ipv6.conf.${IPV6_ACCEPT_RA_FIX}.accept_ra = 2"
+            #
+            # Slashes rather than dots, because an interface name can have a dot
+            # in it - eth0.100 is VLAN 100 on eth0 - and in the dotted spelling
+            # procps and systemd-sysctl both read every dot as a separator and
+            # look for a key under eth0/100 that is not there.
+            echo "net/ipv6/conf/${IPV6_ACCEPT_RA_FIX}/accept_ra = 2"
         fi
     fi
 } > /etc/sysctl.d/99-amneziawg.conf
@@ -2306,7 +2332,8 @@ fi # fresh-install configuration
 # 1c offers --ipv6 off to - procps exits 1 over each of them, which errexit
 # turned into an install that died here, after the build, over settings nobody
 # asked it to make. It hides nothing of this file's: ip_forward is in every
-# kernel, and the IPv6 keys are only written on a host 1c found IPv6 on.
+# kernel, the IPv6 keys are only written on a host 1c found IPv6 on, and the
+# one naming an interface is spelled so that a VLAN's name still reaches it.
 sysctl -q -e --system
 # Then the kernel itself, now that every file has been applied. 1c read those
 # files the way procps and systemd-sysctl do, and this is what catches a setting
