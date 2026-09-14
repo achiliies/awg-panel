@@ -2759,6 +2759,15 @@ awg-quick down "$IFACE" >/dev/null 2>&1 || true
 awg-quick up "$IFACE" >/dev/null 2>&1 || { awg-quick up "$IFACE"
                                            die "$(t "tunnel failed to start" \
                                                     "туннель не запустился")"; }
+# Then the unit's own record of the last time it tried. A boot that could not
+# bring the tunnel up - a module missing for a new kernel, an address the kernel
+# refused - leaves awg-quick@ in `failed`, and nothing cleared that once the
+# tunnel was up by other means: the failure awg-quick had just fixed went on
+# being reported, by `systemctl --failed`, as a degraded system, and on
+# awg-menu's status line. Cleared rather than restarted through the unit, so the
+# unit sits `inactive` over a running tunnel the way every install leaves it,
+# which is the state the panel and awg-menu already read for what it is.
+systemctl reset-failed "awg-quick@${IFACE}" >/dev/null 2>&1 || true
 echo "$(t "  ${IFACE} up on ${PORT}/udp, enabled at boot" \
           "  ${IFACE} запущен на ${PORT}/udp, включён автозапуск при загрузке")"
 

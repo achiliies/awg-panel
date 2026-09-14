@@ -3,8 +3,8 @@
 # tests/recovery.sh - the installer is not allowed to leave a server offline.
 #
 # An upgrade may fail. What it may not do is hand back a machine that was
-# working before it ran and is not working after. Two ways that happened, both
-# checked here:
+# working before it ran and is not working after - or one that is working and
+# still reported as broken. Three ways that happened, all checked here:
 #
 #   * awg-quick runs with `set -e` and arms `trap 'del_if; exit'` before it
 #     creates the interface, clearing it only once the last PostUp has run. A
@@ -16,8 +16,13 @@
 #     and brings it back in step 9. A run that dies in between used to leave it
 #     down, silently.
 #
-# Neither needs root, a module or a network: the hooks are read out of the
-# function that writes them, and the recovery path is driven against stubs.
+#   * install.sh brings the tunnel up with awg-quick, which systemd never hears
+#     about. A boot that could not bring it up leaves awg-quick@ in `failed`,
+#     and a run that repaired the tunnel used to leave the unit there.
+#
+# None of them needs root, a module or a network: the hooks are read out of the
+# function that writes them, the recovery path is driven against stubs, and
+# step 10 is read for the order it does things in.
 #
 # Usage: tests/recovery.sh          (exit 0 = all checks passed)
 #
@@ -145,6 +150,20 @@ if grep -q "could not be brought back up" <<<"$out"; then
     ok "a recovery that itself fails says so"
 else
     bad "a recovery that itself fails says so" "$out"
+fi
+
+printf '\n== a unit a failed boot left behind is cleared ==\n'
+
+# After the bring-up, which is the step that fixed what the unit is reporting,
+# and inside step 10 rather than anywhere later that a failure could skip.
+step10=$(awk '/^# -+ 10\. bring up$/ { p = 1 } /^# -+ 10b\./ { p = 0 } p' "$REPO/install.sh")
+up=$(grep -n '^awg-quick up "\$IFACE"' <<<"$step10" | head -1 | cut -d: -f1)
+reset=$(grep -nF 'systemctl reset-failed "awg-quick@${IFACE}"' <<<"$step10" | head -1 | cut -d: -f1)
+if [[ -n "$up" && -n "$reset" ]] && (( up < reset )); then
+    ok "step 10 clears a failed awg-quick@ unit once the tunnel is up"
+else
+    bad "step 10 clears a failed awg-quick@ unit once the tunnel is up" \
+        "bring-up at line '${up}' of step 10, reset-failed at '${reset}'"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
