@@ -2148,14 +2148,16 @@ lang_save "$LANG_CHOICE" || warn "$(t "could not record the language in ${LANG_F
         fi
     fi
 } > /etc/sysctl.d/99-amneziawg.conf
-# -e, so a key this kernel does not have is not this run's failure. `sysctl
-# --system` reads every other file on the machine as well, stock Ubuntu ships
-# net.ipv6 keys in 10-ipv6-privacy.conf, and on a kernel with no IPv6 - the host
-# 1c offers --ipv6 off to - procps exits 1 over each of them, which errexit
-# turned into an install that died here, after the build, over settings nobody
-# asked it to make. It hides nothing of this file's: ip_forward is in every
-# kernel, the IPv6 keys are only written on a host 1c found IPv6 on, and the
-# one naming an interface is spelled so that a VLAN's name still reaches it.
+# -e says what --system already does rather than changing it. `sysctl --system`
+# reads every other file on the machine as well, Ubuntu ships net.ipv6 keys in
+# them, and on a kernel with no IPv6 - the host 1c offers --ipv6 off to - none of
+# those keys exist. procps skips a missing key and exits 0 for --system on its
+# own, by setting the same flag -e sets (3.3.17 and 4.0.4 alike; only -p FILE
+# exits 1 over one), so an install on ipv6.disable=1 goes through without it.
+# Written out anyway, so this line does not rest on a default it cannot show. It
+# hides nothing of this file's: ip_forward is in every kernel, the IPv6 keys are
+# only written on a host 1c found IPv6 on, and the one naming an interface is
+# spelled so that a VLAN's name still reaches it.
 sysctl -q -e --system
 # Then the kernel itself, now that every file has been applied. 1c read those
 # files the way procps and systemd-sysctl do, and this is what catches a setting
