@@ -219,13 +219,16 @@ kept_off() {
 WRITTEN_OFF=$(sed -n '/# And an "off" written down/,/^        fi$/p' "$INSTALLER")
 KEPT_ENV=$(awk '/# The IPv6 pair as well, which this run/ { p = 1 }
                 /kept existing clients.env/ { p = 0 } p' "$INSTALLER")
-[[ "$WRITTEN_OFF" == *"SUBNET6_CIDR"* && "$KEPT_ENV" == *"with_ipv6"* ]] || {
+[[ "$WRITTEN_OFF" == *"SUBNET6_CIDR"* && "$KEPT_ENV" == *"with_ipv6"* \
+   && "$KEPT_ENV" == *"without_ipv6"* ]] || {
     echo "  FAIL  could not find where install.sh writes the IPv6 half of clients.env" >&2
     echo "        (the anchors in this test need updating)" >&2
     exit 1; }
 
 # CLIENT_ALLOWED_IPS|SUBNET6_CIDR|SUBNET6_MODE as bash reads the file back, once
 # BLOCK has run over ENV with this run's IPV6_MODE, SUBNET6_MODE and SUBNET6_CIDR.
+# The sixth is REPLACED_IPV6 - whether the config a --fresh overwrote carried
+# IPv6 - and is 0 when it is not given.
 env_after() {
     local block="$1" dir="$WORK/env"
     rm -rf "$dir"; mkdir -p "$dir"
@@ -235,7 +238,7 @@ env_after() {
         . '$REPO/lib/subnet6.sh'
         $(awk '/^env_set_kv\(\) \{/,/^\}/' "$INSTALLER")
         CONF_DIR='$dir' SUBNET_CIDR=10.13.0.0/24
-        IPV6_MODE='$3' SUBNET6_MODE='$4' SUBNET6_CIDR='$5'
+        IPV6_MODE='$3' SUBNET6_MODE='$4' SUBNET6_CIDR='$5' REPLACED_IPV6='${6:-0}'
         $block
         . '$dir/clients.env'
         printf '%s|%s|%s\n' \"\$CLIENT_ALLOWED_IPS\" \"\$SUBNET6_CIDR\" \"\$SUBNET6_MODE\""
@@ -416,6 +419,36 @@ KEPT=$(env_after "$KEPT_ENV" 'CLIENT_ALLOWED_IPS="0.0.0.0/0, ::/0"
 SUBNET6_CIDR="fd7a:1e5f:22::/64"
 SUBNET6_MODE="nat"' off '' '')
 ck "a --fresh --ipv6 off records off, with no prefix" "${KEPT#*|}" "|off"
+# And the other direction. The ::/0 a --fresh --ipv6 off finds in a full tunnel
+# is taken back when the config it overwrote carried IPv6, because it was there
+# for that tunnel, and left when it did not, because then somebody put it there.
+FULL6='CLIENT_ALLOWED_IPS="0.0.0.0/0, ::/0"  # "10.13.0.0/24" for split tunnel
+SUBNET6_CIDR="fd7a:1e5f:22::/64"   # blank = this tunnel carries no IPv6
+SUBNET6_MODE="blackhole"   # native | nat | blackhole | off'
+ck "a --fresh --ipv6 off over a tunnel that carried IPv6 stops routing ::/0" \
+   "$(env_after "$KEPT_ENV" "$FULL6" off '' '' 1)" "0.0.0.0/0||off"
+ck "but keeps a ::/0 somebody put on a tunnel that carried none" \
+   "$(env_after "$KEPT_ENV" 'CLIENT_ALLOWED_IPS="0.0.0.0/0, ::/0"
+SUBNET6_MODE="off"' off '' '' 0)" "0.0.0.0/0, ::/0||off"
+ck "and leaves a split tunnel's ::/0 where it is" \
+   "$(env_after "$KEPT_ENV" 'CLIENT_ALLOWED_IPS="10.13.0.0/24, ::/0"' off '' '' 1)" \
+   "10.13.0.0/24, ::/0||off"
+# Asked of the config before the fresh install writes over it, or every --fresh
+# would find the answer it was about to write.
+replaced=$(grep -nF 'if conf_has_ipv6; then REPLACED_IPV6=1; fi' "$INSTALLER" | head -1 | cut -d: -f1)
+written=$(grep -nF 'cat > "$CONF_DIR/${IFACE}.conf" <<EOF' "$INSTALLER" | head -1 | cut -d: -f1)
+ck "whether the replaced tunnel carried IPv6 is asked before its config is written" \
+   "$(( ${replaced:-999999} < ${written:-0} ))" "1"
+
+printf '\n== the ::/0 a tunnel without IPv6 gives back ==\n'
+v6() { bash -c ". '$REPO/lib/subnet.sh'; . '$REPO/lib/subnet6.sh'; $1 \"\$1\"" _ "$2"; }
+ck "a full tunnel loses the ::/0 with_ipv6 gave it" "$(v6 without_ipv6 '0.0.0.0/0, ::/0')" "0.0.0.0/0"
+ck "and so does one written in halves, round the same trip" \
+   "$(v6 without_ipv6 "$(v6 with_ipv6 '0.0.0.0/1, 128.0.0.0/1')")" "0.0.0.0/1, 128.0.0.0/1"
+ck "a split tunnel keeps its ::/0" "$(v6 without_ipv6 '10.13.0.0/24, ::/0')" "10.13.0.0/24, ::/0"
+ck "so does a list with IPv6 routes of its own" \
+   "$(v6 without_ipv6 '0.0.0.0/0, ::/0, 2001:db8::/32')" "0.0.0.0/0, ::/0, 2001:db8::/32"
+ck "and a list with no ::/0 in it is left alone" "$(v6 without_ipv6 '0.0.0.0/0')" "0.0.0.0/0"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 exit $(( FAIL > 0 ))

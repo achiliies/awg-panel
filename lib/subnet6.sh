@@ -298,6 +298,35 @@ with_ipv6() {
     fi
 }
 
+# The same route list without the ::/0 with_ipv6 adds, for a tunnel that has
+# stopped carrying IPv6. Only where what is left is still a full IPv4 tunnel with
+# no IPv6 of its own - the shape with_ipv6 produces - so a split tunnel, or a list
+# somebody gave v6 routes to, is left exactly as it was.
+#
+# No Python twin: only install.sh takes a route back, on a --fresh that replaces
+# a tunnel which carried IPv6 with one that does not.
+without_ipv6() {
+    local value="${1:-}" part rest="" found=0
+    local -a parts=()
+
+    local IFS=,
+    read -ra parts <<<"$value"
+    unset IFS
+
+    for part in "${parts[@]}"; do
+        part="${part#"${part%%[![:space:]]*}"}"
+        part="${part%"${part##*[![:space:]]}"}"
+        [[ -n "$part" ]] || continue
+        if [[ "$part" == "::/0" ]]; then found=1; continue; fi
+        rest+="${rest:+, }${part}"
+    done
+    if (( found )) && needs_ipv6 "$rest"; then
+        printf '%s' "$rest"
+    else
+        printf '%s' "$value"
+    fi
+}
+
 # Is this one of the three modes? Anything else in clients.env is a hand edit,
 # and callers fall back to blackhole rather than guessing: of the ways to be
 # wrong here, the one that leaks is the one worth not choosing by accident.

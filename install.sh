@@ -2253,6 +2253,11 @@ fi
 
 # ------------------------------------------------- 7. server config
 step "$(t "Writing the server configuration" "Запись конфигурации сервера")"
+# Whether the tunnel this run replaces carried IPv6, asked of its config before
+# that is overwritten: the clients.env kept below may be holding a ::/0 that was
+# only ever there for it.
+REPLACED_IPV6=0
+if conf_has_ipv6; then REPLACED_IPV6=1; fi
 SPRIV=$(awg genkey)
 [[ -f "$CONF_DIR/${IFACE}.conf" ]] && \
     cp -a "$CONF_DIR/${IFACE}.conf" "$CONF_DIR/${IFACE}.conf.bak-$(date -u +%Y%m%d%H%M%S)"
@@ -2336,18 +2341,29 @@ if [[ -f "$CONF_DIR/clients.env" ]]; then
     # that was typed.
     env_set_kv "$CONF_DIR/clients.env" SUBNET6_CIDR "$SUBNET6_CIDR" '# blank = this tunnel carries no IPv6'
     env_set_kv "$CONF_DIR/clients.env" SUBNET6_MODE "${SUBNET6_MODE:-off}" '# native | nat | blackhole | off'
-    # And the routes that go with a tunnel that now carries IPv6. A full tunnel
-    # kept from one that carried none claims only 0.0.0.0/0, the panel copies
-    # that into every client it issues, and each of them sends IPv6 outside the
-    # tunnel. The rule an upgrade applies in ipv6_migrate_conf: a full tunnel
-    # becomes a full tunnel, and a split tunnel somebody chose stays as it was.
+    # And the routes that go with it, in whichever direction this run moved. The
+    # rule an upgrade applies in ipv6_migrate_conf: a full tunnel becomes a full
+    # tunnel, and a split tunnel somebody chose stays as it was.
+    OLD_ALLOWED=$(sed -n 's/^[[:space:]]*CLIENT_ALLOWED_IPS="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
+                  "$CONF_DIR/clients.env" | tail -1)
+    NEW_ALLOWED="$OLD_ALLOWED"
     if [[ -n "$SUBNET6_MODE" ]]; then
-        OLD_ALLOWED=$(sed -n 's/^[[:space:]]*CLIENT_ALLOWED_IPS="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' \
-                      "$CONF_DIR/clients.env" | tail -1)
-        if needs_ipv6 "$OLD_ALLOWED"; then
-            env_set_kv "$CONF_DIR/clients.env" CLIENT_ALLOWED_IPS "$(with_ipv6 "$OLD_ALLOWED")" \
-                "# \"${SUBNET_CIDR}\" for split tunnel"
-        fi
+        # Gaining IPv6. A full tunnel kept from one that carried none claims only
+        # 0.0.0.0/0, the panel copies that into every client it issues, and each
+        # of them sends IPv6 outside the tunnel.
+        NEW_ALLOWED=$(with_ipv6 "$OLD_ALLOWED")
+    elif (( REPLACED_IPV6 )); then
+        # Losing it. The ::/0 in a full tunnel kept from one that carried IPv6 is
+        # the one with_ipv6 put there for that tunnel. Left in place, every client
+        # the panel issues routes its IPv6 into a tunnel with nothing to carry it -
+        # not the leak "off" warns about, and not what awg-menu says this server
+        # does. A ::/0 on a tunnel that never carried IPv6 was never the
+        # installer's default, so that one is somebody's choice and stays.
+        NEW_ALLOWED=$(without_ipv6 "$OLD_ALLOWED")
+    fi
+    if [[ "$NEW_ALLOWED" != "$OLD_ALLOWED" ]]; then
+        env_set_kv "$CONF_DIR/clients.env" CLIENT_ALLOWED_IPS "$NEW_ALLOWED" \
+            "# \"${SUBNET_CIDR}\" for split tunnel"
     fi
     echo "$(t "  kept existing clients.env (backed up)" \
               "  сохранён существующий clients.env (создана резервная копия)")"
