@@ -1854,9 +1854,18 @@ ipv6_write_hooks() {
 # " nat | blackhole|" as flags and every upgrade of a config without a
 # SUBNET6_MODE died on "unknown option to `s'" before it reached the panel. c
 # takes its text literally, so no value or comment passed here can be syntax.
+#
+# A line that already holds the value is left as it is. Every upgrade of a tunnel
+# with IPv6 sets the pair again in ipv6_migrate_conf, and every upgrade of one
+# kept "off" records it again; rewritten, each of those lines came back with this
+# function's spacing in place of the file's own - so a run that changed nothing
+# still showed as a change to clients.env - and with any comment an operator had
+# put on it replaced by this one.
 env_set_kv() {
-    local file="$1" key="$2" val="$3" comment="${4:-}"
+    local file="$1" key="$2" val="$3" comment="${4:-}" current
     if grep -q "^[[:space:]]*${key}=" "$file"; then
+        current=$(sed -n "s/^[[:space:]]*${key}=\"\{0,1\}\([^\"]*\)\"\{0,1\}.*/\1/p" "$file" | tail -1)
+        [[ "$current" == "$val" ]] && return 0
         sed -i "/^[[:space:]]*${key}=/c\\${key}=\"${val}\"${comment:+  ${comment}}" "$file"
     else
         printf '%s="%s"%s\n' "$key" "$val" "${comment:+  ${comment}}" >> "$file"

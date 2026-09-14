@@ -244,6 +244,27 @@ env_after() {
         printf '%s|%s|%s\n' \"\$CLIENT_ALLOWED_IPS\" \"\$SUBNET6_CIDR\" \"\$SUBNET6_MODE\""
 }
 
+# Whether BLOCK, run the same way over ENV, left the file byte for byte as it
+# found it: "same", or the diff.
+env_untouched() {
+    local block="$1" dir="$WORK/env"
+    rm -rf "$dir"; mkdir -p "$dir"
+    printf '%s\n' "$2" > "$dir/clients.env"
+    cp "$dir/clients.env" "$dir/before"
+    bash -c "
+        . '$REPO/lib/subnet.sh'
+        . '$REPO/lib/subnet6.sh'
+        $(awk '/^env_set_kv\(\) \{/,/^\}/' "$INSTALLER")
+        CONF_DIR='$dir' SUBNET_CIDR=10.13.0.0/24
+        IPV6_MODE='$3' SUBNET6_MODE='$4' SUBNET6_CIDR='$5' REPLACED_IPV6='${6:-0}'
+        $block"
+    if cmp -s "$dir/before" "$dir/clients.env"; then
+        echo same
+    else
+        diff "$dir/before" "$dir/clients.env" | tr '\n' ' '
+    fi
+}
+
 # --------------------------------------------------------------------- cases
 # mawk is what these servers have and gawk is what a developer has, the same
 # reason tests/hooks.sh runs everything twice.
@@ -449,6 +470,18 @@ ck "a split tunnel keeps its ::/0" "$(v6 without_ipv6 '10.13.0.0/24, ::/0')" "10
 ck "so does a list with IPv6 routes of its own" \
    "$(v6 without_ipv6 '0.0.0.0/0, ::/0, 2001:db8::/32')" "0.0.0.0/0, ::/0, 2001:db8::/32"
 ck "and a list with no ::/0 in it is left alone" "$(v6 without_ipv6 '0.0.0.0/0')" "0.0.0.0/0"
+
+printf '\n== a run that changes nothing rewrites nothing ==\n'
+# Every upgrade of a tunnel with IPv6 sets the pair again, and every upgrade of
+# one kept "off" records it again. Neither may turn a fresh install's spacing, or
+# a comment an operator put there, into a change nobody made.
+ck "an upgrade that records the off already there leaves clients.env as it was" \
+   "$(env_untouched "$WRITTEN_OFF" "$V4_ENV" off '' '')" "same"
+ck "and so does a --fresh that lands on the IPv6 pair already there" \
+   "$(env_untouched "$KEPT_ENV" "$FULL6" auto blackhole fd7a:1e5f:22::/64)" "same"
+ck "keeping a comment somebody put on a line that already held the value" \
+   "$(env_untouched "$WRITTEN_OFF" 'SUBNET6_CIDR=""
+SUBNET6_MODE="off"   # kept off by hand: this provider has no IPv6' off '' '')" "same"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 exit $(( FAIL > 0 ))
